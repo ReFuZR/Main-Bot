@@ -85,9 +85,10 @@ Fields in every profile: `name`, `clan_tag`, `prestige`, `rank_xp`, `fov`,
 How it works: the game has a function, `Cbuf_AddText`, that queues console
 commands. JRPC2 lets the PC call it. Its address differs per title update:
 
-- **BO2 TU18** has a community-reported address. `setup` checks that it
-  starts like a function on *your* console, then asks before saving it.
-  It's unverified, and a wrong address can crash the game (just restart).
+- **BO2 TU18, MW2 TU9 and MW3 TU24** have community-reported addresses
+  (MW3 has two conflicting reports, and `setup` tries both). `setup` checks
+  each one starts like a function on *your* console, then asks before saving.
+  They're unverified, and a wrong address can crash the game (just restart).
 - **Other games** have no suggestion. Find the address yourself (for example
   from a disassembly of `default_mp.xex`) and save it with
   `setfunc Cbuf_AddText 0x8xxxxxxx`. The tool refuses addresses that don't

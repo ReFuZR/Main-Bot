@@ -186,7 +186,8 @@ class Shell(cmd.Cmd):
         """funcs - list game functions the tool can call and their addresses"""
         for fn in self.offsets.functions.values():
             where = f"0x{fn.addr:08X}" if fn.addr is not None else "(not set)"
-            hint = f"  suggested 0x{fn.suggested:08X}" if fn.suggested and fn.addr is None else ""
+            hint = ("  suggested " + ", ".join(f"0x{a:08X}" for a in fn.suggested)
+                    if fn.suggested and fn.addr is None else "")
             print(f"  {fn.name:<14} {where:<12}{hint}  {fn.desc}")
 
     def do_setfunc(self, arg):
@@ -210,19 +211,22 @@ class Shell(cmd.Cmd):
                 ok = jrpc.looks_like_function(self.xb, fn.addr)
                 print(f"  {fn.name}: 0x{fn.addr:08X} {'looks good' if ok else 'does NOT look like a function'}")
                 continue
-            if fn.suggested is None:
+            if not fn.suggested:
                 print(f"  {fn.name}: no address and no suggestion for {self.offsets.short}; "
                       f"find it yourself and use 'setfunc {fn.name} <addr>'")
                 continue
-            if not jrpc.looks_like_function(self.xb, fn.suggested):
-                print(f"  {fn.name}: suggested 0x{fn.suggested:08X} doesn't look like a function "
-                      "on your console (different title update?)")
-                continue
-            print(f"  {fn.name}: suggested 0x{fn.suggested:08X} looks like a function start.")
-            print("  It's community-reported and unverified; a wrong address can crash the game.")
-            if self._ask("  save it? [y/N] ").lower() in ("y", "yes"):
-                self.offsets.set_func_addr(fn.name, fn.suggested)
-                print(f"  saved. Try: cmd cg_drawFPS 1")
+            for addr in fn.suggested:
+                if not jrpc.looks_like_function(self.xb, addr):
+                    print(f"  {fn.name}: suggested 0x{addr:08X} doesn't look like a function "
+                          "on your console (different title update?)")
+                    continue
+                print(f"  {fn.name}: suggested 0x{addr:08X} looks like a function start.")
+                print("  It's community-reported and unverified; a wrong address can crash the game.")
+                print("  Test it with something harmless right after: cmd cg_drawFPS 1")
+                if self._ask("  save it? [y/N] ").lower() in ("y", "yes"):
+                    self.offsets.set_func_addr(fn.name, addr)
+                    print("  saved.")
+                    break
 
     # -- named fields ---------------------------------------------------------
     def do_fields(self, _):

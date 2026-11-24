@@ -130,6 +130,16 @@ class CommandShellTests(unittest.TestCase):
         self.run_cmd("cmd cg_fov 90; cg_drawFPS 1")
         self.assertEqual(self.srv.executed, ["cg_fov 90", "cg_drawFPS 1"])
 
+    def test_setup_tries_each_suggestion(self):
+        self.shell.offsets.functions["Cbuf_AddText"].suggested = [0x83000000, mc.CBUF_ADDR]
+        out = self.run_cmd("setup", ["y"])
+        self.assertIn("0x83000000 doesn't look like a function", out)
+        self.assertEqual(self.shell.offsets.functions["Cbuf_AddText"].addr, mc.CBUF_ADDR)
+
+    def test_profiles_with_suggestions(self):
+        for short, n in (("bo2", 1), ("mw2", 1), ("mw3", 2), ("bo1", 0)):
+            self.assertEqual(len(Offsets(offsets_path(short)).functions["Cbuf_AddText"].suggested), n)
+
     def test_setup_declined_saves_nothing(self):
         self.run_cmd("setup", ["n"])
         self.assertIsNone(json.loads(self.path.read_text())["functions"]["Cbuf_AddText"]["addr"])

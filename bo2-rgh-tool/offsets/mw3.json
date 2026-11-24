@@ -8,7 +8,11 @@
   "functions": {
     "Cbuf_AddText": {
       "addr": null,
-      "desc": "Cbuf_AddText(int localClientNum, const char *text): runs console commands."
+      "desc": "Cbuf_AddText(int localClientNum, const char *text): runs console commands.",
+      "suggested": [
+        "0x8228DAC0",
+        "0x82287F68"
+      ]
     }
   },
   "fields": {

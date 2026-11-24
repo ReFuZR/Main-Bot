@@ -41,7 +41,7 @@ class Field:
 class Function:
     name: str
     addr: int | None
-    suggested: int | None
+    suggested: list[int]
     desc: str = ""
 
 
@@ -51,6 +51,13 @@ def _parse_addr(value) -> int | None:
     if isinstance(value, int):
         return value
     return int(str(value), 0)
+
+
+def _parse_suggested(value) -> list[int]:
+    if value is None:
+        return []
+    values = value if isinstance(value, list) else [value]
+    return [_parse_addr(v) for v in values]
 
 
 class Offsets:
@@ -70,7 +77,7 @@ class Offsets:
         self.functions: dict[str, Function] = {}
         for name, f in self.raw.get("functions", {}).items():
             self.functions[name] = Function(name, _parse_addr(f.get("addr")),
-                                            _parse_addr(f.get("suggested")), f.get("desc", ""))
+                                            _parse_suggested(f.get("suggested")), f.get("desc", ""))
 
     def _save(self) -> None:
         self.path.write_text(json.dumps(self.raw, indent=2) + "\n")
@@ -97,7 +104,7 @@ class Offsets:
             raise KeyError(f"unknown function '{name}' (known: {', '.join(self.functions) or 'none'})")
         fn = self.functions[name]
         if fn.addr is None:
-            hint = " (try 'setup' to check the suggested address)" if fn.suggested else ""
+            hint = " (try 'setup' to check the suggested addresses)" if fn.suggested else ""
             raise LookupError(f"{name} has no address yet; use 'setfunc {name} <addr>'{hint}")
         return fn
 
