@@ -15,6 +15,8 @@ from .xbdm import XBDM_PORT, Xbdm, XbdmError
 
 DEFAULT_OFFSETS = Path(__file__).resolve().parent.parent / "offsets.json"
 DEFAULT_SCAN = (0x82000000, 0x86000000)
+WIZARD_KINDS = {"string": "str", "i32": "i32", "u32": "u32", "float": "float", "bytes": "hex"}
+WIZARD_PICK_LIMIT = 8
 
 BANNER = r"""
   ___  ___ ___   ___  ___ _  _   _____         _
@@ -76,6 +78,7 @@ class Shell(cmd.Cmd):
         self.offsets = offsets
         self.last_hits: list[int] = []
         self.last_kind = ""
+        self.ask = input  # swapped out in tests
 
     # -- plumbing -------------------------------------------------------------
     def onecmd(self, line):
@@ -173,9 +176,7 @@ class Shell(cmd.Cmd):
         start, end = DEFAULT_SCAN
         if len(parts) >= 4:
             start, end = int(parts[2], 0), int(parts[3], 0)
-        pattern = encode_value(kind, value)
-        print(f"searching 0x{start:08X}-0x{end:08X} for {pattern.hex().upper()}")
-        self.last_hits = self.xb.scan(start, end, pattern, progress=_make_progress())
+        self.last_hits = self._scan(kind, value, start, end)
         self.last_kind = kind
         self._show_hits()
 
@@ -183,16 +184,24 @@ class Shell(cmd.Cmd):
         """refine <value> - keep only previous hits that now hold <value>"""
         if not self.last_hits:
             raise ValueError("nothing to refine; run 'find' first")
-        pattern = encode_value(self.last_kind, arg.strip())
+        self.last_hits = self._refine(self.last_kind, arg.strip(), self.last_hits)
+        self._show_hits()
+
+    def _scan(self, kind: str, value: str, start: int, end: int) -> list[int]:
+        pattern = encode_value(kind, value)
+        print(f"searching 0x{start:08X}-0x{end:08X} for {pattern.hex().upper()}")
+        return self.xb.scan(start, end, pattern, progress=_make_progress())
+
+    def _refine(self, kind: str, value: str, hits: list[int]) -> list[int]:
+        pattern = encode_value(kind, value)
         kept = []
-        for addr in self.last_hits:
+        for addr in hits:
             try:
                 if self.xb.read(addr, len(pattern)) == pattern:
                     kept.append(addr)
             except XbdmError:
                 pass
-        self.last_hits = kept
-        self._show_hits()
+        return kept
 
     def _show_hits(self):
         print(f"{len(self.last_hits)} hit(s)")
@@ -202,6 +211,95 @@ class Shell(cmd.Cmd):
             print("  ... use 'refine' to narrow down")
         if len(self.last_hits) == 1:
             print("one hit, save it with: setaddr <field> " f"0x{self.last_hits[0]:08X}")
+
+    # -- guided finder --------------------------------------------------------
+    def do_wizard(self, arg):
+        """wizard [field ...] [--range start end] - guided search for field addresses
+
+        Walks through every field that has no address yet (or the fields you
+        name), narrows the hits down with your help, and saves each address
+        to offsets.json. Type 'skip' at any prompt to move on, 'quit' to stop."""
+        parts = shlex.split(arg)
+        start, end = DEFAULT_SCAN
+        if "--range" in parts:
+            i = parts.index("--range")
+            start, end = int(parts[i + 1], 0), int(parts[i + 2], 0)
+            del parts[i : i + 3]
+        if parts:
+            names = parts
+            for n in names:
+                if n not in self.offsets.fields:
+                    raise KeyError(f"unknown field '{n}'")
+        else:
+            names = [n for n, f in self.offsets.fields.items() if f.addr is None]
+        if not names:
+            print("every field already has an address (name fields to redo them)")
+            return
+
+        print(f"wizard: {len(names)} field(s) to find: {', '.join(names)}")
+        print("type 'skip' to move to the next field, 'quit' to stop\n")
+        found, skipped = [], []
+        for name in names:
+            result = self._wizard_field(name, start, end)
+            if result == "quit":
+                skipped.extend(n for n in names if n not in found and n not in skipped)
+                break
+            (found if result else skipped).append(name)
+        print(f"\nwizard done: found {len(found)}" + (f" ({', '.join(found)})" if found else ""))
+        if skipped:
+            print(f"not found: {', '.join(skipped)} (run 'wizard {' '.join(skipped)}' to retry)")
+
+    def _wizard_field(self, name: str, start: int, end: int):
+        """Returns True if saved, False if skipped, 'quit' to stop the wizard."""
+        field = self.offsets.fields[name]
+        kind = WIZARD_KINDS[field.type]
+        print(f"== {name} ({field.type}) - {field.desc}")
+        value = self._ask(f"  current value of {name} in game: ")
+        if value in ("skip", "quit"):
+            print()
+            return "quit" if value == "quit" else False
+        hits = self._scan(kind, value, start, end)
+
+        while True:
+            if not hits:
+                print("  no matches. Check the value (and the scan range) and retry later.")
+                return False
+            if len(hits) == 1:
+                self.offsets.set_addr(name, hits[0])
+                print(f"  found it: {name} = 0x{hits[0]:08X} (saved)\n")
+                return True
+            print(f"  {len(hits)} matches")
+            if len(hits) <= WIZARD_PICK_LIMIT:
+                for i, addr in enumerate(hits, 1):
+                    print(f"   {i}) 0x{addr:08X}  {self._preview(addr)}")
+                print("  type 'pick N' to choose one of these, or keep narrowing:")
+            answer = self._ask(f"  change {name} in game, then type the new value: ")
+            if answer in ("skip", "quit"):
+                print()
+                return "quit" if answer == "quit" else False
+            if answer.startswith("pick "):
+                try:
+                    choice = hits[int(answer.split()[1]) - 1]
+                except (ValueError, IndexError):
+                    print("  invalid pick")
+                    continue
+                hits = [choice]
+                continue
+            hits = self._refine(kind, answer, hits)
+
+    def _preview(self, addr: int) -> str:
+        try:
+            raw = self.xb.read(addr, 16)
+        except XbdmError:
+            return "(unreadable)"
+        asc = "".join(chr(b) if 32 <= b < 127 else "." for b in raw)
+        return f"{raw.hex(' ').upper()}  {asc}"
+
+    def _ask(self, prompt: str) -> str:
+        try:
+            return self.ask(prompt).strip()
+        except EOFError:
+            return "quit"
 
     # -- raw memory -----------------------------------------------------------
     def do_peek(self, arg):

@@ -32,6 +32,7 @@ python -m bo2tool 192.168.1.50 -c info -c "get name"   # one-shot commands
 | `get <field>` | Read a field, e.g. `get name` |
 | `set <field> <value>` | Write a field, e.g. `set name ^1Red^7Guy` |
 | `freeze <field> <value> [secs]` | Keep re-writing a value until Ctrl+C |
+| `wizard [field ...] [--range start end]` | Guided search that finds and saves every missing address |
 | `find <type> <value> [start end]` | Scan memory. Type is `hex`/`u32`/`i32`/`float`/`str` |
 | `refine <value>` | Keep only the previous `find` hits that now hold `<value>` |
 | `setaddr <field> <addr>` | Save an address into `offsets.json` |
@@ -43,8 +44,42 @@ python -m bo2tool 192.168.1.50 -c info -c "get name"   # one-shot commands
 ## Finding offsets
 
 `offsets.json` ships **empty on purpose**. Addresses change between title
-updates, and copied offset lists are often wrong. Finding them yourself is
-the fun part, cheat-engine style:
+updates, and copied offset lists are often wrong.
+
+### The easy way: `wizard`
+
+```
+bo2> wizard
+wizard: 5 field(s) to find: name, clan_tag, prestige, rank_xp, fov
+== name (string) - In-game name...
+  current value of name in game: YourGamertag
+  3 matches
+   1) 0x8xxxxxxx  59 6F 75 72 ...  YourGamertag....
+   2) ...
+  type 'pick N' to choose one of these, or keep narrowing:
+  change name in game, then type the new value: pick 1
+  found it: name = 0x8xxxxxxx (saved)
+== prestige (i32) - Prestige level (0-15).
+  current value of prestige in game: 4
+  812 matches
+  change prestige in game, then type the new value: 5
+  found it: prestige = 0x8xxxxxxx (saved)
+```
+
+For each field without an address, it asks for the value you see in game,
+scans for it, then keeps asking you to change the value in game and type
+the new one until only one match is left. That address is saved to
+`offsets.json`. With 8 or fewer matches it shows a preview of each, and you
+can `pick N`. Type `skip` to move on, or `quit` to stop.
+`wizard prestige fov` redoes just those fields.
+
+Tips:
+- Values you can't change in game (like FOV, or prestige if you don't want to
+  touch it) are best found with `pick` from the previews, or skipped.
+- Your gamertag appears in several places. The one used in game usually sits
+  right next to the clan tag.
+
+### The manual way: `find` / `refine`
 
 ```
 bo2> find str YourGamertag            # the in-game name

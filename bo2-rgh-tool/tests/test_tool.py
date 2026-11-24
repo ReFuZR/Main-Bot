@@ -109,6 +109,74 @@ class ToolTests(unittest.TestCase):
         out = self.run_cmd("peek 0x83000000 16")
         self.assertIn("DE AD BE EF", out)
 
+    # -- wizard ---------------------------------------------------------------
+    def script(self, *steps):
+        """Feed answers to the wizard. A step is either an answer string or a
+        callable run first (to 'change something in game') then its answer."""
+        steps = list(steps)
+
+        def ask(prompt):
+            if not steps:
+                raise EOFError
+            step = steps.pop(0)
+            if isinstance(step, tuple):
+                step[0]()
+                return step[1]
+            return step
+
+        self.shell.ask = ask
+        return steps
+
+    def saved(self):
+        return json.loads(self.offsets_path.read_text())["fields"]
+
+    def test_wizard_finds_unique_string(self):
+        self.script("MockPlayer")
+        out = self.run_cmd("wizard name --range 0x83500000 0x83600000")
+        self.assertIn("found it: name = 0x83551E00", out)
+        self.assertEqual(self.saved()["name"]["addr"], "0x83551E00")
+
+    def test_wizard_narrows_numbers_by_changing_in_game(self):
+        self.xb.write_i32(0x83400000, 10)
+        self.xb.write_i32(0x83400100, 10)
+        self.script(
+            "10",
+            # "prestige up in game": the real field and one decoy move to 11
+            (lambda: (self.xb.write_i32(mc.PRESTIGE_ADDR, 11),
+                      self.xb.write_i32(0x83400100, 11)), "11"),
+            (lambda: self.xb.write_i32(mc.PRESTIGE_ADDR, 12), "12"),
+        )
+        out = self.run_cmd("wizard prestige --range 0x83400000 0x83560000")
+        self.assertIn("3 matches", out)
+        self.assertIn("2 matches", out)
+        self.assertEqual(self.saved()["prestige"]["addr"], "0x83551E40")
+
+    def test_wizard_pick_from_short_list(self):
+        self.xb.write(0x83400000, b"MockPlayer\x00")
+        self.script("MockPlayer", "pick 2")
+        out = self.run_cmd("wizard name --range 0x83400000 0x83560000")
+        self.assertIn("MockPlayer", out)  # preview shows the text
+        self.assertEqual(self.saved()["name"]["addr"], "0x83551E00")
+
+    def test_wizard_skip_and_quit(self):
+        self.script("skip", "quit")
+        out = self.run_cmd("wizard --range 0x83500000 0x83600000")
+        self.assertIn("found 0", out)
+        self.assertIn("not found: name, clan_tag, prestige, rank_xp, fov", out)
+        self.assertTrue(all(f["addr"] is None for f in self.saved().values()))
+
+    def test_wizard_only_does_missing_fields(self):
+        self.run_cmd("setaddr name 0x83551E00")
+        self.script("quit")
+        out = self.run_cmd("wizard")
+        self.assertIn("clan_tag, prestige, rank_xp, fov", out)
+        self.assertNotIn("find: name", out)
+
+    def test_wizard_no_matches(self):
+        self.script("NotThere")
+        out = self.run_cmd("wizard name --range 0x83500000 0x83600000")
+        self.assertIn("no matches", out)
+
     def test_strip_colors(self):
         self.assertEqual(strip_colors("^1Red^7Guy"), "RedGuy")
 
