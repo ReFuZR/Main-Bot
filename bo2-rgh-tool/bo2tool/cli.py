@@ -1,4 +1,4 @@
-"""Interactive shell for poking at BO2 on an RGH console."""
+"""Interactive shell for poking at BO2 (and other 360 CoD games) on an RGH console."""
 
 from __future__ import annotations
 
@@ -10,10 +10,12 @@ import sys
 import time
 from pathlib import Path
 
-from .game import BO2_XEX_HINT, Offsets, read_field, strip_colors, write_field
+from . import jrpc
+from .catalog import Catalog
+from .game import Offsets, available_games, offsets_path, read_field, strip_colors, write_field
 from .xbdm import XBDM_PORT, Xbdm, XbdmError
 
-DEFAULT_OFFSETS = Path(__file__).resolve().parent.parent / "offsets.json"
+CBUF = "Cbuf_AddText"
 DEFAULT_SCAN = (0x82000000, 0x86000000)
 WIZARD_KINDS = {"string": "str", "i32": "i32", "u32": "u32", "float": "float", "bytes": "hex"}
 WIZARD_PICK_LIMIT = 8
@@ -23,7 +25,7 @@ BANNER = r"""
  | _ )/ _ \_  ) | _ \/ __| || | |_   _|__  ___| |
  | _ \ (_) / /  |   / (_ | __ |   | |/ _ \/ _ \ |
  |___/\___/___| |_|_\\___|_||_|   |_|\___/\___/_|
-        just for fun - offline / private matches
+   just for fun - offline / private matches - Xbox 360 CoD
 Type 'help' for commands.
 """
 
@@ -70,12 +72,13 @@ def _make_progress():
 
 
 class Shell(cmd.Cmd):
-    prompt = "bo2> "
-
-    def __init__(self, xb: Xbdm, offsets: Offsets):
+    def __init__(self, xb: Xbdm, offsets: Offsets, catalog: Catalog | None = None):
         super().__init__()
         self.xb = xb
         self.offsets = offsets
+        self.catalog = catalog or Catalog()
+        self.prompt = f"{offsets.short}> "
+        self.warned_host = False
         self.last_hits: list[int] = []
         self.last_kind = ""
         self.ask = input  # swapped out in tests
@@ -101,8 +104,9 @@ class Shell(cmd.Cmd):
         xex = self.xb.running_xex()
         print(f"console : {self.xb.console_name()}")
         print(f"running : {xex}")
-        if BO2_XEX_HINT not in xex.lower():
-            print(f"warning : doesn't look like BO2 multiplayer ({BO2_XEX_HINT})")
+        print(f"profile : {self.offsets.game} ({self.offsets.title_update}) - {self.offsets.path.name}")
+        if self.offsets.xex.lower() not in xex.lower():
+            print(f"warning : doesn't look like multiplayer ({self.offsets.xex}); wrong game or mode?")
 
     def do_reboot(self, arg):
         """reboot [cold] - reboot the console"""
@@ -117,6 +121,108 @@ class Shell(cmd.Cmd):
         if code in (202, 211):
             for line in self.xb._read_multiline():
                 print(f"  {line}")
+
+    # -- game console commands (needs JRPC2) ----------------------------------
+    def do_cmd(self, arg):
+        """cmd <console command> - run a built-in game command, e.g. 'cmd cg_fov 90'
+
+        Needs the JRPC2 plugin on the console and the Cbuf_AddText address
+        (see 'setup'). Several commands can be joined with ';'."""
+        text = arg.strip()
+        if not text:
+            raise ValueError("usage: cmd <console command>")
+        self._run_commands([c.strip() for c in text.split(";") if c.strip()])
+
+    def _run_commands(self, commands: list[str]) -> None:
+        fn = self.offsets.func(CBUF)
+        game = self.offsets.short
+        for c in commands:
+            entry = self.catalog.lookup(c.split()[0])
+            if entry is None:
+                print(f"  note: '{c.split()[0]}' isn't in the catalog; sending anyway")
+            elif game not in entry.games:
+                print(f"  note: '{entry.name}' isn't listed for {game}; sending anyway")
+            elif entry.scope == "host" and not self.warned_host:
+                print("  note: host settings affect everyone in your lobby - use a private match")
+                self.warned_host = True
+            jrpc.call(self.xb, fn.addr, 0, c + "\n")
+            print(f"  > {c}")
+
+    def do_commands(self, arg):
+        """commands [search] - list built-in commands for this game, e.g. 'commands fov'
+
+        Search matches names, descriptions or a category (view, hud, player,
+        world, match, misc). H = affects the lobby when you host, C = needs sv_cheats 1."""
+        entries = sorted(self.catalog.search(self.offsets.short, arg.strip()),
+                         key=lambda e: (e.category, e.name))
+        if not entries:
+            print("no matching commands")
+            return
+        width = max(len(e.name) for e in entries)
+        category = None
+        for e in entries:
+            if e.category != category:
+                category = e.category
+                print(f"[{category}]")
+            flags = ("H" if e.scope == "host" else " ") + ("C" if e.cheat else " ")
+            default = f" (default {e.default})" if e.default is not None else ""
+            print(f"  {e.name:<{width}} {flags} {e.desc}{default}")
+        print(f"{len(entries)} command(s). Example: cmd {entries[0].example or entries[0].name}")
+
+    def do_presets(self, _):
+        """presets - list command presets"""
+        for p in self.catalog.presets.values():
+            print(f"  {p.name:<12} {p.desc}")
+            print(f"  {'':<12} {'; '.join(p.commands)}")
+
+    def do_preset(self, arg):
+        """preset <name> - run a group of commands, e.g. 'preset thirdperson'"""
+        run, skipped = self.catalog.preset_commands(arg.strip(), self.offsets.short)
+        if skipped:
+            print(f"  skipping (not in {self.offsets.short}): {', '.join(skipped)}")
+        self._run_commands(run)
+
+    def do_funcs(self, _):
+        """funcs - list game functions the tool can call and their addresses"""
+        for fn in self.offsets.functions.values():
+            where = f"0x{fn.addr:08X}" if fn.addr is not None else "(not set)"
+            hint = f"  suggested 0x{fn.suggested:08X}" if fn.suggested and fn.addr is None else ""
+            print(f"  {fn.name:<14} {where:<12}{hint}  {fn.desc}")
+
+    def do_setfunc(self, arg):
+        """setfunc <function> <addr> [--force] - save a function address after a sanity check"""
+        parts = arg.split()
+        if len(parts) < 2:
+            raise ValueError("usage: setfunc <function> <addr> [--force]")
+        name, addr = parts[0], int(parts[1], 0)
+        if name not in self.offsets.functions:
+            raise KeyError(f"unknown function '{name}'")
+        if not jrpc.looks_like_function(self.xb, addr) and "--force" not in parts:
+            raise ValueError(f"0x{addr:08X} doesn't start like a function; "
+                             "double-check it or add --force")
+        self.offsets.set_func_addr(name, addr)
+        print(f"saved {name} = 0x{addr:08X}")
+
+    def do_setup(self, _):
+        """setup - check function addresses and offer the suggested ones"""
+        for fn in self.offsets.functions.values():
+            if fn.addr is not None:
+                ok = jrpc.looks_like_function(self.xb, fn.addr)
+                print(f"  {fn.name}: 0x{fn.addr:08X} {'looks good' if ok else 'does NOT look like a function'}")
+                continue
+            if fn.suggested is None:
+                print(f"  {fn.name}: no address and no suggestion for {self.offsets.short}; "
+                      f"find it yourself and use 'setfunc {fn.name} <addr>'")
+                continue
+            if not jrpc.looks_like_function(self.xb, fn.suggested):
+                print(f"  {fn.name}: suggested 0x{fn.suggested:08X} doesn't look like a function "
+                      "on your console (different title update?)")
+                continue
+            print(f"  {fn.name}: suggested 0x{fn.suggested:08X} looks like a function start.")
+            print("  It's community-reported and unverified; a wrong address can crash the game.")
+            if self._ask("  save it? [y/N] ").lower() in ("y", "yes"):
+                self.offsets.set_func_addr(fn.name, fn.suggested)
+                print(f"  saved. Try: cmd cg_drawFPS 1")
 
     # -- named fields ---------------------------------------------------------
     def do_fields(self, _):
@@ -327,15 +433,27 @@ class Shell(cmd.Cmd):
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="bo2tool", description="BO2 RGH tool over XBDM")
-    ap.add_argument("host", help="console IP address")
+    ap = argparse.ArgumentParser(prog="bo2tool", description="BO2 / 360 CoD RGH tool over XBDM")
+    ap.add_argument("host", nargs="?", help="console IP address")
     ap.add_argument("--port", type=int, default=XBDM_PORT)
-    ap.add_argument("--offsets", type=Path, default=DEFAULT_OFFSETS)
+    ap.add_argument("--game", default="bo2", help="game profile from offsets/ (default bo2)")
+    ap.add_argument("--offsets", type=Path, help="use this offsets file instead of --game")
+    ap.add_argument("--list-games", action="store_true", help="list game profiles and exit")
     ap.add_argument("-c", "--command", action="append",
                     help="run a command and exit (can be repeated)")
     args = ap.parse_args(argv)
 
-    offsets = Offsets(args.offsets)
+    if args.list_games:
+        for short, name in available_games().items():
+            print(f"  {short:<8} {name}")
+        return 0
+    if not args.host:
+        ap.error("host is required")
+    try:
+        offsets = Offsets(args.offsets or offsets_path(args.game))
+    except KeyError as e:
+        print(f"error: {e.args[0]}")
+        return 2
     xb = Xbdm(args.host, args.port)
     try:
         xb.connect()

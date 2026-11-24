@@ -1,0 +1,88 @@
+{
+  "game": "Call of Duty: World at War",
+  "short": "waw",
+  "title_id": "4156081C",
+  "xex": "default_mp.xex",
+  "title_update": "TU7",
+  "notes": "Addresses differ between title updates and are left empty on purpose. Find them with 'wizard'. 'suggested' values are community-reported, unverified, and only used after the tool checks the address looks like a function.",
+  "functions": {
+    "Cbuf_AddText": {
+      "addr": null,
+      "desc": "Cbuf_AddText(int localClientNum, const char *text): runs console commands."
+    }
+  },
+  "fields": {
+    "name": {
+      "addr": null,
+      "type": "string",
+      "size": 32,
+      "desc": "In-game name. Supports colour codes like ^1 (red) ... ^7 (white)."
+    },
+    "clan_tag": {
+      "addr": null,
+      "type": "string",
+      "size": 5,
+      "desc": "Clan tag (4 characters + terminator)."
+    },
+    "prestige": {
+      "addr": null,
+      "type": "i32",
+      "desc": "Prestige level (0-10)."
+    },
+    "rank_xp": {
+      "addr": null,
+      "type": "i32",
+      "desc": "Rank XP."
+    },
+    "fov": {
+      "addr": null,
+      "type": "float",
+      "desc": "cg_fov value (default 65.0)."
+    },
+    "kills": {
+      "addr": null,
+      "type": "i32",
+      "desc": "Career kills. Goes up as you play, easy to refine."
+    },
+    "deaths": {
+      "addr": null,
+      "type": "i32",
+      "desc": "Career deaths."
+    },
+    "wins": {
+      "addr": null,
+      "type": "i32",
+      "desc": "Career wins."
+    },
+    "losses": {
+      "addr": null,
+      "type": "i32",
+      "desc": "Career losses."
+    },
+    "score": {
+      "addr": null,
+      "type": "i32",
+      "desc": "Career score."
+    },
+    "headshots": {
+      "addr": null,
+      "type": "i32",
+      "desc": "Career headshots."
+    },
+    "time_played": {
+      "addr": null,
+      "type": "i32",
+      "desc": "Time played in seconds."
+    },
+    "match_kills": {
+      "addr": null,
+      "type": "i32",
+      "desc": "Kills in the current match (resets each match)."
+    },
+    "match_score": {
+      "addr": null,
+      "type": "i32",
+      "desc": "Score in the current match (resets each match)."
+    }
+  }
+}

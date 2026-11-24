@@ -30,7 +30,7 @@ class ToolTests(unittest.TestCase):
         self.xb.connect()
         self.tmp = Path(tempfile.mkdtemp())
         self.offsets_path = self.tmp / "offsets.json"
-        shutil.copy(ROOT / "offsets.json", self.offsets_path)
+        shutil.copy(ROOT / "offsets" / "bo2.json", self.offsets_path)
         self.shell = Shell(self.xb, Offsets(self.offsets_path))
 
     def tearDown(self):
@@ -162,7 +162,7 @@ class ToolTests(unittest.TestCase):
         self.script("skip", "quit")
         out = self.run_cmd("wizard --range 0x83500000 0x83600000")
         self.assertIn("found 0", out)
-        self.assertIn("not found: name, clan_tag, prestige, rank_xp, fov", out)
+        self.assertIn("not found: name, clan_tag, prestige, rank_xp, fov, kills", out)
         self.assertTrue(all(f["addr"] is None for f in self.saved().values()))
 
     def test_wizard_only_does_missing_fields(self):

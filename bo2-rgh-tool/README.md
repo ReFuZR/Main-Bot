@@ -1,115 +1,148 @@
 # BO2 RGH Tool
 
-A just-for-fun Black Ops 2 tool for an RGH/JTAG Xbox 360. It talks to the
-console over **XBDM**, the debug monitor on TCP port 730, so you can read and
-write game memory from your PC: name changer (with colour codes), prestige,
-FOV and anything else you can find.
+A just-for-fun tool for Black Ops 2 and the other Xbox 360 Call of Duty
+games on an RGH/JTAG console. From your PC it can:
+
+- read and write your own player's values (name with colour codes, clan tag,
+  prestige, XP, FOV, kills, wins and more) over **XBDM**
+- find those addresses for you with a guided `wizard`
+- run the game's own **console commands** (`cg_fov 90`, `cg_thirdPerson 1`,
+  `god`, `noclip`, ...) through the **JRPC2** plugin, with a built-in catalog
+  and presets
 
 It needs Python 3.10+ and nothing else.
 
-> Stick to offline play, private matches or your own stealth servers. Modifying
-> stats on official servers can get the account banned.
+> Use it offline, in private matches, or on your own stealth servers.
+> Changing stats (prestige, XP, kills...) and then playing online can get the
+> account banned. Commands marked **H** affect everyone in a match you host,
+> so use them in private matches. This tool deliberately has nothing that
+> targets other players.
+
+## Supported games
+
+`--game` picks a profile from `offsets/`. The default is `bo2`.
+
+| `--game` | Game | Title ID |
+|---|---|---|
+| `bo2` | Black Ops II | 415608C3 |
+| `bo1` | Black Ops | 41560855 |
+| `mw2` | Modern Warfare 2 | 41560817 |
+| `mw3` | Modern Warfare 3 | 415608CB |
+| `ghosts` | Ghosts | 415608FC |
+| `cod4` | Call of Duty 4 | 415607E6 |
+| `waw` | World at War | 4156081C |
+| `aw` | Advanced Warfare | 41560914 |
+
+Each profile has the same fields and ships with **no addresses**. They differ
+per title update, so you find them on your console (see `wizard`).
 
 ## Console setup
 
-1. Boot your RGH into a dashboard that loads `xbdm.xex` as a plugin
-   (Aurora/FSD/Dashlaunch `plugin1 = ...\xbdm.xex`).
-2. Find the console's IP (Aurora shows it in the status bar).
-3. Start BO2.
+1. Boot your RGH into a dashboard that loads plugins (Aurora/FSD + Dashlaunch).
+2. Load `xbdm.xex`. That covers memory reading/writing, `wizard`, `get`/`set`.
+3. For game console commands (`cmd`, `preset`), also load the **JRPC2**
+   plugin (`JRPC2.xex`) as another Dashlaunch plugin.
+4. Find the console's IP (Aurora shows it), then start the game.
 
 ## Usage
 
 ```sh
 cd bo2-rgh-tool
-python -m bo2tool 192.168.1.50            # interactive shell
-python -m bo2tool 192.168.1.50 -c info -c "get name"   # one-shot commands
+python -m bo2tool 192.168.1.50                 # BO2, interactive shell
+python -m bo2tool 192.168.1.50 --game mw2      # another game
+python -m bo2tool --list-games
+python -m bo2tool 192.168.1.50 -c "preset fov" # one-shot commands
 ```
+
+### Your player's values (XBDM)
 
 | Command | What it does |
 |---|---|
-| `info` | Console name and the running XEX (warns if it isn't `default_mp.xex`) |
-| `fields` | List the named fields in `offsets.json` and their addresses |
-| `get <field>` | Read a field, e.g. `get name` |
-| `set <field> <value>` | Write a field, e.g. `set name ^1Red^7Guy` |
+| `info` | Console name, running XEX, and which game profile is loaded |
+| `fields` | List the fields and their addresses |
+| `wizard [field ...] [--range start end]` | Guided search that finds and saves missing addresses |
+| `get <field>` / `set <field> <value>` | Read/write a field, e.g. `set name ^1Red^7Guy` |
 | `freeze <field> <value> [secs]` | Keep re-writing a value until Ctrl+C |
-| `wizard [field ...] [--range start end]` | Guided search that finds and saves every missing address |
-| `find <type> <value> [start end]` | Scan memory. Type is `hex`/`u32`/`i32`/`float`/`str` |
-| `refine <value>` | Keep only the previous `find` hits that now hold `<value>` |
-| `setaddr <field> <addr>` | Save an address into `offsets.json` |
-| `peek <addr> [len]` | Hexdump memory |
-| `poke <addr> <type> <value>` | Write raw memory |
-| `raw <xbdm cmd>` | Send any XBDM command, e.g. `raw systime` |
-| `reboot [cold]` | Reboot the console |
+| `find <type> <value> [start end]` / `refine <value>` | Manual memory search (`hex`/`u32`/`i32`/`float`/`str`) |
+| `setaddr <field> <addr>` | Save a field address by hand |
+| `peek <addr> [len]` / `poke <addr> <type> <value>` | Raw memory |
+| `raw <xbdm cmd>` / `reboot [cold]` | Anything else |
 
-## Finding offsets
+Fields in every profile: `name`, `clan_tag`, `prestige`, `rank_xp`, `fov`,
+`kills`, `deaths`, `wins`, `losses`, `score`, `headshots`, `time_played`,
+`match_kills`, `match_score`.
 
-`offsets.json` ships **empty on purpose**. Addresses change between title
-updates, and copied offset lists are often wrong.
+### Game console commands (JRPC2)
 
-### The easy way: `wizard`
+| Command | What it does |
+|---|---|
+| `setup` | Check the `Cbuf_AddText` address and offer the suggested one |
+| `cmd <command>` | Run any console command, e.g. `cmd cg_fov 90`. Join several with `;` |
+| `commands [search]` | Browse the catalog: `commands fov`, `commands world` |
+| `presets` / `preset <name>` | Groups of commands: `fov`, `thirdperson`, `cinematic`, `noir`, `moon`, `slowmo`, `sandbox`, `reset`, ... |
+| `funcs` / `setfunc <name> <addr>` | Function addresses |
+
+How it works: the game has a function, `Cbuf_AddText`, that queues console
+commands. JRPC2 lets the PC call it. Its address differs per title update:
+
+- **BO2 TU18** has a community-reported address. `setup` checks that it
+  starts like a function on *your* console, then asks before saving it.
+  It's unverified, and a wrong address can crash the game (just restart).
+- **Other games** have no suggestion. Find the address yourself (for example
+  from a disassembly of `default_mp.xex`) and save it with
+  `setfunc Cbuf_AddText 0x8xxxxxxx`. The tool refuses addresses that don't
+  start like a function unless you add `--force`.
+
+The catalog (`commands.json`, 58 commands) marks each entry:
+
+- **H**: host setting. It changes the match for everyone in your lobby.
+- **C**: cheat-protected. Run `sv_cheats 1` first, in a match you host.
+
+`cmd` still sends commands that aren't in the catalog, so anything else the
+engine has works too. Add your own entries or presets to `commands.json`.
+
+## Finding offsets: `wizard`
 
 ```
 bo2> wizard
-wizard: 5 field(s) to find: name, clan_tag, prestige, rank_xp, fov
+wizard: 14 field(s) to find: name, clan_tag, prestige, ...
 == name (string) - In-game name...
   current value of name in game: YourGamertag
   3 matches
    1) 0x8xxxxxxx  59 6F 75 72 ...  YourGamertag....
-   2) ...
   type 'pick N' to choose one of these, or keep narrowing:
   change name in game, then type the new value: pick 1
   found it: name = 0x8xxxxxxx (saved)
-== prestige (i32) - Prestige level (0-15).
-  current value of prestige in game: 4
-  812 matches
-  change prestige in game, then type the new value: 5
-  found it: prestige = 0x8xxxxxxx (saved)
+== kills (i32) - Career kills...
+  current value of kills in game: 15234
+  change kills in game, then type the new value: 15241
+  found it: kills = 0x8xxxxxxx (saved)
 ```
 
-For each field without an address, it asks for the value you see in game,
-scans for it, then keeps asking you to change the value in game and type
-the new one until only one match is left. That address is saved to
-`offsets.json`. With 8 or fewer matches it shows a preview of each, and you
-can `pick N`. Type `skip` to move on, or `quit` to stop.
-`wizard prestige fov` redoes just those fields.
+It asks for the value you see in game and scans for it. Then you change the
+value in game (play a bit, prestige, rename) and type the new one, until only
+one match is left. That address is saved to the profile. With 8 or fewer
+matches it shows previews, and you can `pick N`. `skip` moves on, `quit`
+stops, and `wizard kills wins` redoes just those fields.
 
 Tips:
-- Values you can't change in game (like FOV, or prestige if you don't want to
-  touch it) are best found with `pick` from the previews, or skipped.
+- Career stats (kills, wins, score) are easy: play a match and refine.
+- `match_kills` / `match_score` reset each match, so refine mid-game.
+- FOV can't be changed in game on the 360. Use `pick` or skip it.
 - Your gamertag appears in several places. The one used in game usually sits
-  right next to the clan tag.
-
-### The manual way: `find` / `refine`
-
-```
-bo2> find str YourGamertag            # the in-game name
-3 hit(s)
-  0x8xxxxxxx ...
-bo2> peek 0x8xxxxxxx                  # look at each to pick the right one
-bo2> setaddr name 0x8xxxxxxx
-bo2> set name ^5Blue^7Name
-
-bo2> find i32 4                       # e.g. your current prestige
-812 hit(s)
-   ...prestige up / change it in game...
-bo2> refine 5
-1 hit(s)
-bo2> setaddr prestige 0x8xxxxxxx
-```
-
-The default scan range is `0x82000000-0x86000000`. Pass `start end` to
-narrow or move it. Over XBDM a full 64 MB scan takes a while.
-
-Xbox 360 is big-endian, and the tool handles that for `u32`/`i32`/`float`.
+  next to the clan tag.
+- Full 64 MB scans over XBDM take a few minutes. Narrowing down is quick.
 
 ## Trying it without an Xbox
 
-A fake console is included:
+The fake console plays BO2, with `MockPlayer` in memory and a fake
+`Cbuf_AddText` at the suggested address that prints each command it gets:
 
 ```sh
 python -m bo2tool.mock_console --port 7300          # terminal 1
 python -m bo2tool 127.0.0.1 --port 7300             # terminal 2
-bo2> find str MockPlayer
+bo2> setup
+bo2> preset thirdperson
 ```
 
 ## Tests
@@ -117,3 +150,7 @@ bo2> find str MockPlayer
 ```sh
 python -m unittest discover -s tests -t .
 ```
+
+Everything is tested against the fake console only. The JRPC2 wire format is
+a clean reimplementation of the protocol, so check it on real hardware
+before relying on it.
