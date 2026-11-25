@@ -59,7 +59,10 @@
     {"name": "say_team", "cat": "misc", "flags": "", "games": "all", "desc": "Send a chat message to your team.", "example": "say_team rush B"},
     {"name": "disconnect", "cat": "misc", "flags": "", "games": "all", "desc": "Leave the current match.", "example": "disconnect"},
     {"name": "reconnect", "cat": "misc", "flags": "", "games": "all", "desc": "Reconnect to the last server.", "example": "reconnect"},
-    {"name": "quit", "cat": "misc", "flags": "", "games": "all", "desc": "Quit the game to the dashboard.", "example": "quit"}
+    {"name": "quit", "cat": "misc", "flags": "", "games": "all", "desc": "Quit the game to the dashboard.", "example": "quit"},
+    {"name": "setviewpos", "cat": "player", "flags": "HC", "games": "all", "desc": "Teleport yourself: setviewpos <x> <y> <z> [yaw] [pitch].", "example": "setviewpos 0 0 500"},
+    {"name": "jump_slowdownEnable", "cat": "player", "flags": "HC", "games": ["mw2", "mw3"], "desc": "Slow down after landing a jump (0 = off, for trickshot practice).", "default": "1", "example": "jump_slowdownEnable 0"},
+    {"name": "scr_testclients", "cat": "match", "flags": "H", "games": ["cod4", "mw2", "mw3"], "desc": "Spawn test bots into a private match you host.", "default": "0", "example": "scr_testclients 3"}
   ],
   "presets": {
     "fov": {"desc": "Wider field of view.", "commands": ["cg_fov 90", "cg_fovScale 1.15"]},
@@ -73,6 +76,8 @@
     "speed": {"desc": "Fast movement (host).", "commands": ["g_speed 400"]},
     "slowmo": {"desc": "Slow motion (host).", "commands": ["sv_cheats 1", "timescale 0.5"]},
     "sandbox": {"desc": "Practice mode: cheats on, infinite ammo, unlimited sprint (host).", "commands": ["sv_cheats 1", "player_sustainAmmo 1", "player_sprintUnlimited 1"]},
-    "reset": {"desc": "Put the view, HUD and world settings back to defaults.", "commands": ["cg_fov 65", "cg_fovScale 1", "cg_thirdPerson 0", "cg_draw2D 1", "cg_drawGun 1", "cg_drawCrosshair 1", "r_filmUseTweaks 0", "r_filmTweakEnable 0", "g_gravity 800", "jump_height 39", "g_speed 190", "timescale 1", "bg_fallDamageMinHeight 128", "bg_fallDamageMaxHeight 300", "player_sustainAmmo 0", "player_sprintUnlimited 0", "sv_cheats 0"]}
+    "reset": {"desc": "Put the view, HUD and world settings back to defaults.", "commands": ["cg_fov 65", "cg_fovScale 1", "cg_thirdPerson 0", "cg_draw2D 1", "cg_drawGun 1", "cg_drawCrosshair 1", "r_filmUseTweaks 0", "r_filmTweakEnable 0", "g_gravity 800", "jump_height 39", "g_speed 190", "timescale 1", "bg_fallDamageMinHeight 128", "bg_fallDamageMaxHeight 300", "player_sustainAmmo 0", "player_sprintUnlimited 0", "jump_slowdownEnable 1", "sv_cheats 0"]},
+    "practice": {"desc": "Trickshot practice: cheats on, no fall damage, infinite ammo, no jump slowdown (host).", "commands": ["sv_cheats 1", "bg_fallDamageMinHeight 9998", "bg_fallDamageMaxHeight 9999", "player_sustainAmmo 1", "jump_slowdownEnable 0"]},
+    "bots": {"desc": "Add 3 test bots to a private match you host.", "commands": ["scr_testclients 3"]}
   }
 }

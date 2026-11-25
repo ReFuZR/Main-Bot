@@ -138,20 +138,6 @@ class Xbdm:
     def put(self, addr: int, kind: str, value: str, size: int | None = None) -> None:
         self.write(addr, encode(kind, value, size))
 
-    def scan(self, start: int, end: int, pattern: bytes, chunk: int = 0x10000, progress=None) -> list[int]:
-        """Every address in [start, end) holding `pattern`. Unreadable chunks are skipped."""
-        hits, find = [], re.compile(b"(?=" + re.escape(pattern) + b")")
-        for a in range(start, end, chunk):
-            n = min(chunk, end - a)
-            try:  # read a little extra so matches across chunk edges are found
-                data = self.read(a, n + len(pattern) - 1 if a + n < end else n)
-            except XbdmError:
-                continue
-            hits += [a + m.start() for m in find.finditer(data) if m.start() < n]
-            if progress:
-                progress(a + n - start, end - start)
-        return hits
-
     # -- JRPC2 ------------------------------------------------------------------
     def is_function(self, addr: int) -> bool:
         """Cheap check before calling an address: does it start like a function?"""

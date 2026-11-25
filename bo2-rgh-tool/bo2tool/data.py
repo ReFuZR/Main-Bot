@@ -39,6 +39,9 @@ FIELDS = {  # name: (type, size, description)
     "time_played": ("i32", 4, "Time played in seconds."),
     "match_kills": ("i32", 4, "Kills in the current match (resets each match)."),
     "match_score": ("i32", 4, "Score in the current match (resets each match)."),
+    "pos_x": ("float", 4, "Your X position (for savepos/loadpos). Find with ? and more/less while moving."),
+    "pos_y": ("float", 4, "Your Y position (for savepos/loadpos)."),
+    "pos_z": ("float", 4, "Your height (for savepos/loadpos). Easiest: ?, go up stairs, more."),
 }
 
 

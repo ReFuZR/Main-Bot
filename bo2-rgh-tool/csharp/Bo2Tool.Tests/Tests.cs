@@ -8,7 +8,7 @@ using Xunit;
 
 public sealed class MockConsole : IDisposable
 {
-    public const uint Name = 0x83551E00, Prestige = 0x83551E40, Fov = 0x83551E44, Cbuf = 0x824015E0;
+    public const uint Name = 0x83551E00, Prestige = 0x83551E40, Fov = 0x83551E44, Cbuf = 0x824015E0, Pos = 0x83551F00;
     readonly Process process;
     public int Port { get; }
 
@@ -107,18 +107,45 @@ public class ConsoleTests(MockConsole mock) : IClassFixture<MockConsole>
     }
 
     [Fact]
-    public void ScanFindsAcrossChunksSkipsUnmappedAndRefines()
+    public void SearchFindsAcrossChunksSkipsUnmappedAndRefines()
     {
         using var xb = mock.Connect();
         xb.Write(0x8310FFFE, "ABCD"u8.ToArray());
-        Assert.Equal([0x8310FFFEu], xb.Scan(0x83100000, 0x83120000, "ABCD"u8.ToArray()));
+        var s = new Search(xb, "str");
+        s.Start("ABCD", 0x83100000, 0x83120000);
+        Assert.Equal([0x8310FFFEu], s.Hits);
+        xb.Write(0x8310FFFE, "ABCE"u8.ToArray());
+        Assert.Equal(1, s.Refine("changed"));
+        Assert.Throws<ArgumentException>(() => s.Refine("more"));
         xb.Write(0x82000010, "Needle"u8.ToArray());
-        Assert.Equal([0x82000010u], xb.Scan(0x81FE0000, 0x82010000, "Needle"u8.ToArray()));
+        s.Start("Needle", 0x81FE0000, 0x82010000);
+        Assert.Equal([0x82000010u], s.Hits);
         xb.Put(0x83200000, "i32", "77");
         xb.Put(0x83200100, "i32", "77");
-        var hits = xb.Scan(0x83200000, 0x83201000, Codec.Encode("i32", "77"));
+        var n = new Search(xb, "i32");
+        Assert.Equal(2, n.Start("77", 0x83200000, 0x83201000));
         xb.Put(0x83200100, "i32", "78");
-        Assert.Equal([0x83200100u], xb.Refine(hits, Codec.Encode("i32", "78")));
+        Assert.Equal(1, n.Refine("78"));
+        Assert.Equal("78", n.Value(0x83200100));
+    }
+
+    [Fact]
+    public void UnknownValueSearchNarrowsByChanges()
+    {
+        using var xb = mock.Connect();
+        uint z = MockConsole.Pos + 8, decoy = 0x83551F80;
+        xb.Put(decoy, "float", "7");
+        var s = new Search(xb, "float");
+        Assert.Equal(0x10000 / 4, s.Start("?", 0x83550000, 0x83560000));
+        xb.Put(z, "float", "80");
+        xb.Put(decoy, "float", "9");
+        Assert.Equal(2, s.Refine("more"));
+        xb.Put(z, "float", "60");
+        xb.Put(decoy, "float", "10");
+        Assert.Equal(1, s.Refine("less"));
+        Assert.Equal([z], s.Hits);
+        xb.Put(z, "float", "50");
+        Assert.Throws<ArgumentException>(() => new Search(xb, "str").Start("?", 0x83550000, 0x83560000));
     }
 
     [Fact]

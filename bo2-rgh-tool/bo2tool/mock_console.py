@@ -4,7 +4,7 @@
     python -m bo2tool 127.0.0.1 --port 7300
 
 It plays BO2 with "MockPlayer" at NAME, prestige 10 at PRESTIGE, FOV 65.0 at FOV,
-and a fake Cbuf_AddText at CBUF that records (and prints) each command it gets.
+your position (100.0, 200.0, 50.0) at POS, and a fake Cbuf_AddText at CBUF that records (and prints) each command it gets.
 Memory outside 0x82000000-0x86000000 reads as '??' like unmapped pages.
 """
 
@@ -19,13 +19,15 @@ import threading
 
 BASE, SIZE = 0x82000000, 0x04000000
 NAME, PRESTIGE, FOV, CBUF = 0x83551E00, 0x83551E40, 0x83551E44, 0x824015E0
+POS = 0x83551F00  # x, y, z floats
 
 
 class Memory:
     def __init__(self):
         self.data = bytearray(SIZE)
         for addr, raw in ((NAME, b"MockPlayer\0"), (PRESTIGE, struct.pack(">i", 10)),
-                          (FOV, struct.pack(">f", 65.0)), (CBUF, struct.pack(">I", 0x7D8802A6))):  # mflr r12
+                          (FOV, struct.pack(">f", 65.0)), (POS, struct.pack(">3f", 100.0, 200.0, 50.0)),
+                          (CBUF, struct.pack(">I", 0x7D8802A6))):  # mflr r12
             self.write(addr, raw)
 
     def read_hex(self, addr: int, n: int) -> str:

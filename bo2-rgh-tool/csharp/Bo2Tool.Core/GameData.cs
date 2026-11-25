@@ -47,6 +47,9 @@ public static class GameData
         new("time_played", "i32", 4, "Time played in seconds."),
         new("match_kills", "i32", 4, "Kills in the current match (resets each match)."),
         new("match_score", "i32", 4, "Score in the current match (resets each match)."),
+        new("pos_x", "float", 4, "Your X position (for Save/Load position). Find with ? and more/less while moving."),
+        new("pos_y", "float", 4, "Your Y position (for Save/Load position)."),
+        new("pos_z", "float", 4, "Your height (for Save/Load position). Easiest: ?, go up stairs, more."),
     ];
 
     public static Game GameByShort(string s) => Games.FirstOrDefault(g => g.Short == s)

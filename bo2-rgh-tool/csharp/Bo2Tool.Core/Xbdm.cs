@@ -187,31 +187,6 @@ public sealed class Xbdm : IDisposable
 
     public void Put(uint addr, string kind, string value, int? size = null) => Write(addr, Codec.Encode(kind, value, size));
 
-    /// <summary>Every address in [start, end) holding pattern. Unreadable chunks are skipped.</summary>
-    public List<uint> Scan(uint start, uint end, byte[] pattern, int chunk = 0x10000,
-                           Action<long, long>? progress = null, CancellationToken cancel = default)
-    {
-        var hits = new List<uint>();
-        for (long a = start; a < end; a += chunk)
-        {
-            cancel.ThrowIfCancellationRequested();
-            int n = (int)Math.Min(chunk, end - a);
-            byte[] data;
-            try { data = Read((uint)a, a + n < end ? n + pattern.Length - 1 : n); } // a little extra for matches across edges
-            catch (XbdmException) { continue; }
-            for (int i = 0, j; (j = data.AsSpan(i).IndexOf(pattern)) >= 0 && i + j < n; i += j + 1)
-                hits.Add((uint)(a + i + j));
-            progress?.Invoke(a + n - start, end - start);
-        }
-        return hits;
-    }
-
-    public List<uint> Refine(IEnumerable<uint> hits, byte[] pattern) => hits.Where(a =>
-    {
-        try { return Read(a, pattern.Length).AsSpan().SequenceEqual(pattern); }
-        catch (XbdmException) { return false; }
-    }).ToList();
-
     // -- JRPC2 ------------------------------------------------------------------
     /// <summary>Cheap check before calling an address: does it start like a function?</summary>
     public bool IsFunction(uint addr)

@@ -66,14 +66,15 @@ python -m bo2tool 192.168.1.50 -c "preset fov" # one-shot commands
 | `wizard [field ...] [--range start end]` | Guided search that finds and saves missing addresses |
 | `get <field>` / `set <field> <value>` | Read/write a field, e.g. `set name ^1Red^7Guy` |
 | `freeze <field> <value> [secs]` | Keep re-writing a value until Ctrl+C |
-| `find <type> <value> [start end]` / `refine <value>` | Manual memory search (`hex`/`u32`/`i32`/`float`/`str`) |
+| `find <type> <value\|?> [start end]` / `refine <value\|same\|changed\|more\|less>` | Manual memory search (`hex`/`u32`/`i32`/`float`/`str`). `?` = a value you can't see |
+| `savepos [slot]` / `loadpos [slot]` | Save where you are, teleport back later (needs `pos_x`/`pos_y`/`pos_z`; offline or a private match you host) |
 | `setaddr <field> <addr>` | Save a field address by hand |
 | `peek <addr> [len]` / `poke <addr> <type> <value>` | Raw memory |
 | `raw <xbdm cmd>` / `reboot [cold]` | Anything else |
 
 Fields in every game: `name`, `clan_tag`, `prestige`, `rank_xp`, `fov`,
 `kills`, `deaths`, `wins`, `losses`, `score`, `headshots`, `time_played`,
-`match_kills`, `match_score`.
+`match_kills`, `match_score`, `pos_x`, `pos_y`, `pos_z`.
 
 ### Game console commands (JRPC2)
 
@@ -82,7 +83,7 @@ Fields in every game: `name`, `clan_tag`, `prestige`, `rank_xp`, `fov`,
 | `setup` | Check the `Cbuf_AddText` address and offer the suggested one |
 | `cmd <command>` | Run any console command, e.g. `cmd cg_fov 90`. Join several with `;` |
 | `commands [search]` | Browse the catalog: `commands fov`, `commands world` |
-| `presets` / `preset <name>` | Groups of commands: `fov`, `thirdperson`, `cinematic`, `noir`, `moon`, `slowmo`, `sandbox`, `reset`, ... |
+| `presets` / `preset <name>` | Groups of commands: `fov`, `thirdperson`, `cinematic`, `noir`, `moon`, `slowmo`, `sandbox`, `practice`, `bots`, `reset`, ... |
 | `funcs` / `setfunc Cbuf_AddText <addr>` | Show / save the function address |
 
 How it works: the game has a function, `Cbuf_AddText`, that queues console
@@ -97,7 +98,7 @@ commands. JRPC2 lets the PC call it. Its address differs per title update:
   `setfunc Cbuf_AddText 0x8xxxxxxx`. The tool refuses addresses that don't
   start like a function unless you add `--force`.
 
-The catalog (`commands.json`, 58 commands) marks each entry:
+The catalog (`commands.json`, 61 commands) marks each entry:
 
 - **H**: host setting. It changes the match for everyone in your lobby.
 - **C**: cheat-protected. Run `sv_cheats 1` first, in a match you host.
@@ -133,6 +134,22 @@ Tips:
 - Career stats (kills, wins, score) are easy: play a match and refine.
 - `match_kills` / `match_score` reset each match, so refine mid-game.
 - FOV can't be changed in game on the 360. Use `pick` or skip it.
+- **Values you can't see** (like your position): answer `?` first. Then move
+  and answer `more`, `less`, `same` or `changed`. For `pos_z` (height): `?`,
+  walk up stairs, `more`, walk down, `less`, stand still, `same`... For
+  `pos_x`/`pos_y`, walk in one direction and try `more`; if it drops to 0
+  matches, retry with `less`. A narrower `--range` makes this much faster.
+
+## Practice tools
+
+Features inspired by practice/trickshot mod menus, written for this tool,
+for offline play or private matches you host:
+
+- `savepos` / `loadpos [slot]`: save spots and teleport back (after finding
+  `pos_x`, `pos_y`, `pos_z` with the wizard).
+- `preset practice`: no fall damage, infinite ammo, no jump slowdown (MW2/MW3).
+- `preset bots`: test bots in your private match (CoD4/MW2/MW3).
+- `cmd setviewpos <x> <y> <z>`, `cmd ufo`, `cmd noclip`, `cmd god`.
 - Your gamertag appears in several places. The one used in game usually sits
   next to the clan tag.
 - Full 64 MB scans over XBDM take a few minutes. Narrowing down is quick.

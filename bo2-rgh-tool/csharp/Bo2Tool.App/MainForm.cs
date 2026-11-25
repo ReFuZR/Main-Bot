@@ -25,7 +25,8 @@ sealed class MainForm : Form
     readonly Catalog catalog = Catalog.Load(Path.Combine(AppContext.BaseDirectory, "commands.json"));
     Profile profile = new(GameData.Games[0]);
     CancellationTokenSource? scanCancel;
-    List<uint> hits = [];
+    Search? search;
+    readonly Dictionary<string, float[]> positions = [];
     bool hostNoteShown;
 
     // top bar + log
@@ -41,9 +42,12 @@ sealed class MainForm : Form
     readonly Button readBtn = Btn("Read all"), setBtn = Btn("Set value");
     readonly CheckBox freezeBox = new() { Text = "Freeze (keep writing)", AutoSize = true, Padding = new(0, 4, 0, 0) };
     readonly System.Windows.Forms.Timer freezeTimer = new() { Interval = 500 };
+    readonly ComboBox posSlot = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 50 };
+    readonly Button savePosBtn = Btn("Save position"), loadPosBtn = Btn("Load position");
 
     // Finder tab
     readonly ComboBox findField = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 130 };
+    readonly ComboBox compareBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 150 };
     readonly TextBox findValue = new() { Width = 160 }, rangeStart = new() { Text = "0x82000000", Width = 90 }, rangeEnd = new() { Text = "0x86000000", Width = 90 };
     readonly Button newScanBtn = Btn("New scan"), nextScanBtn = Btn("Next scan"), cancelBtn = Btn("Cancel"), saveHitBtn = Btn("Save selected address");
     readonly ProgressBar scanProgress = new() { Width = 200, Height = 20 };
@@ -75,16 +79,19 @@ sealed class MainForm : Form
         findField.Items.AddRange(GameData.Fields.Select(f => f.Name).ToArray());
         presetBox.Items.AddRange(catalog.Presets.Keys.ToArray());
         pokeType.Items.AddRange(["hex", "u32", "i32", "float", "str"]);
-        findField.SelectedIndex = presetBox.SelectedIndex = pokeType.SelectedIndex = 0;
+        compareBox.Items.AddRange(["the value I typed", .. Search.Ops]);
+        posSlot.Items.AddRange(["1", "2", "3", "4", "5"]);
+        findField.SelectedIndex = presetBox.SelectedIndex = pokeType.SelectedIndex = compareBox.SelectedIndex = posSlot.SelectedIndex = 0;
 
         var tabs = new TabControl { Dock = DockStyle.Fill };
         tabs.TabPages.Add(Page("Player", fieldList,
             Row(Lbl("Value:"), valueBox, setBtn, freezeBox, readBtn),
-            Row(Lbl("Select a field, type a value, Set. Fields without an address are found on the Finder tab."))));
+            Row(Lbl("Select a field, type a value, Set. Fields without an address are found on the Finder tab.")),
+            Row(Lbl("Slot:"), posSlot, savePosBtn, loadPosBtn, Lbl("(needs pos_x/pos_y/pos_z; offline or a private match you host)"))));
         tabs.TabPages.Add(Page("Finder", hitList,
-            Row(Lbl("1. Pick a field, type the value you see in game, New scan.  2. Change it in game, type the new value, Next scan.")),
-            Row(Lbl("3. Repeat until one is left (it's saved for you), or select one and save it.  Previews show for 50 or fewer.")),
-            Row(Lbl("Field:"), findField, Lbl("Value:"), findValue, newScanBtn, nextScanBtn, cancelBtn, scanProgress),
+            Row(Lbl("1. Pick a field, type the value you see in game (or ? if you can't see it, like your position), New scan.")),
+            Row(Lbl("2. Change it in game. Type the new value, or pick same/changed/more/less, Next scan.  3. Repeat until one is left.")),
+            Row(Lbl("Field:"), findField, Lbl("Value:"), findValue, newScanBtn, Lbl("Next scan matches:"), compareBox, nextScanBtn, cancelBtn, scanProgress),
             Row(Lbl("Range:"), rangeStart, Lbl("to"), rangeEnd, saveHitBtn)));
         tabs.TabPages.Add(Page("Commands", cmdList,
             Row(Lbl("Cbuf_AddText:"), cbufLbl, setupBtn, cbufBox, setCbufBtn, Lbl("(needs the JRPC2 plugin on the console)")),
@@ -109,7 +116,13 @@ sealed class MainForm : Form
         newScanBtn.Click += async (_, _) => await Scan(newScan: true);
         nextScanBtn.Click += async (_, _) => await Scan(newScan: false);
         cancelBtn.Click += (_, _) => scanCancel?.Cancel();
-        saveHitBtn.Click += (_, _) => { if (hitList.SelectedIndex >= 0) SaveHit(GameData.Fields[findField.SelectedIndex], hits[hitList.SelectedIndex]); };
+        saveHitBtn.Click += (_, _) =>
+        {
+            if (search?.Hits is { } hits && hitList.SelectedIndex >= 0 && hitList.SelectedIndex < hits.Count)
+                SaveHit(GameData.Fields[findField.SelectedIndex], hits[hitList.SelectedIndex]);
+        };
+        savePosBtn.Click += async (_, _) => await SavePosition();
+        loadPosBtn.Click += async (_, _) => await LoadPosition();
         setupBtn.Click += async (_, _) => await Setup();
         setCbufBtn.Click += async (_, _) => await SetCbuf();
         sendBtn.Click += async (_, _) => await SendCommands(cmdBox.Text.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
@@ -192,7 +205,8 @@ sealed class MainForm : Form
     void LoadGame(Game game)
     {
         profile = new Profile(game);
-        hits = [];
+        search = null;
+        positions.Clear();
         hitList.Items.Clear();
         FillFields();
         FillCommands();
@@ -248,46 +262,67 @@ sealed class MainForm : Form
         await Run("freeze", () => xb.Put(profile.Addr(f.Name), f.Type, value, f.Size), quiet: true);
     }
 
+    async Task SavePosition()
+    {
+        var slot = (string)posSlot.SelectedItem!;
+        await Run("save position", () =>
+        {
+            positions[slot] = "xyz".Select(c => (float)xb.Get(profile.Addr($"pos_{c}"), "float")).ToArray();
+            Log($"saved position {slot}: {string.Join(", ", positions[slot].Select(v => v.ToString("F1", CultureInfo.InvariantCulture)))}");
+        });
+    }
+
+    async Task LoadPosition()
+    {
+        var slot = (string)posSlot.SelectedItem!;
+        if (!positions.TryGetValue(slot, out var pos)) { Log($"no position saved in slot {slot}"); return; }
+        await Run("load position", () =>
+        {
+            for (int i = 0; i < 3; i++)
+                xb.Put(profile.Addr($"pos_{"xyz"[i]}"), "float", pos[i].ToString("R", CultureInfo.InvariantCulture));
+            Log($"loaded position {slot}");
+        });
+    }
+
     // -- Finder tab ---------------------------------------------------------------
     async Task Scan(bool newScan)
     {
         var field = GameData.Fields[findField.SelectedIndex];
-        string value = findValue.Text, startText = rangeStart.Text, endText = rangeEnd.Text; // read controls on the UI thread
-        if (!newScan && hits.Count == 0) { Log("no previous results: start with New scan"); return; }
+        string answer = !newScan && compareBox.SelectedIndex > 0 ? (string)compareBox.SelectedItem! : findValue.Text.Trim();
+        string startText = rangeStart.Text, endText = rangeEnd.Text; // read controls on the UI thread
+        if (!newScan && search == null) { Log("no previous results: start with New scan"); return; }
         scanCancel = new CancellationTokenSource();
         var token = scanCancel.Token;
         scanProgress.Value = 0;
         await Run("scan", () =>
         {
-            var pattern = Codec.Encode(field.FindKind, value);
             if (newScan)
             {
                 uint start = Codec.ParseAddr(startText), end = Codec.ParseAddr(endText);
-                Log($"searching 0x{start:X8}-0x{end:X8} for {field.Name} = {value}...");
+                Log($"searching 0x{start:X8}-0x{end:X8} for {field.Name} = {answer}...");
+                var fresh = new Search(xb, field.FindKind);
                 int last = -1;
-                hits = xb.Scan(start, end, pattern, progress: (done, total) =>
+                fresh.Start(answer, start, end, (done, total) =>
                 {
                     int pct = (int)(done * 100 / total);
                     if (pct != last) { last = pct; BeginInvoke(() => scanProgress.Value = pct); }
-                }, cancel: token);
+                }, token);
+                search = fresh;
             }
-            else hits = xb.Refine(hits, pattern);
-            var lines = hits.Select(a => $"0x{a:X8}" + (hits.Count <= 50 ? $"  {Preview(a)}" : "")).ToArray();
-            Log($"{hits.Count} match(es)" + (hits.Count > 1 ? $": change {field.Name} in game, type the new value, Next scan" : ""));
+            else search!.Refine(answer, token);
+            var s = search!;
+            object[] lines = s.Hits == null
+                ? [$"{s.Count} addresses remembered - change {field.Name} in game, then Next scan with same/changed/more/less"]
+                : s.Hits.Take(1000).Select(a => (object)$"0x{a:X8}  {s.Value(a)}").ToArray();
+            Log($"{s.Count} match(es)" + (s.Count > 1 ? $": change {field.Name} in game, then Next scan" : ""));
             BeginInvoke(() =>
             {
                 hitList.Items.Clear();
-                hitList.Items.AddRange(lines.Take(1000).ToArray<object>());
+                hitList.Items.AddRange(lines);
                 scanProgress.Value = 100;
-                if (hits.Count == 1) SaveHit(field, hits[0]);
+                if (s.Count == 1) SaveHit(field, s.Hits![0]);
             });
         });
-    }
-
-    string Preview(uint addr)
-    {
-        try { var raw = xb.Read(addr, 16); return $"{Codec.Spaced(raw)}  {Codec.Printable(raw)}"; }
-        catch (XbdmException) { return "(unreadable)"; }
     }
 
     void SaveHit(Field field, uint addr)

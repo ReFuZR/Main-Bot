@@ -34,8 +34,8 @@ Then type the console IP, pick the game and click **Connect**.
 
 | Tab | What it does |
 |---|---|
-| **Player** | Your values (name, clan tag, prestige, XP, FOV, kills, ...). Select one, type a value, **Set value**. **Freeze** keeps writing it. |
-| **Finder** | Finds field addresses, like the Python `wizard`. Pick a field, type the value you see in game, **New scan**. Change it in game, type the new value, **Next scan**. When one match is left it offers to save it. With 50 or fewer it shows previews. Select one and **Save selected address** to pick it yourself. |
+| **Player** | Your values (name, clan tag, prestige, XP, FOV, kills, position, ...). Select one, type a value, **Set value**. **Freeze** keeps writing it. **Save position** / **Load position** (5 slots) teleport you back to a saved spot, once `pos_x`/`pos_y`/`pos_z` are found (offline or a private match you host). |
+| **Finder** | Finds field addresses, like the Python `wizard`. Pick a field, type the value you see in game (or `?` for one you can't see, like your position), **New scan**. Change it in game, then type the new value or pick **same / changed / more / less**, and **Next scan**. When one match is left it offers to save it. The list shows each match with its current value (up to 1,000). Select one and **Save selected address** to pick it yourself. |
 | **Commands** | Game console commands. **Setup** checks the suggested `Cbuf_AddText` address (BO2, MW2, MW3) on your console and asks before saving it. Then type a command (`cg_fov 90`, several joined with `;`) and **Send**, or run a **preset**. The list shows every catalog command for the game: **H** = affects everyone in a lobby you host, **C** = needs `sv_cheats 1`. |
 | **Memory** | Hexdump (**Peek**) and raw writes (**Poke**). |
 

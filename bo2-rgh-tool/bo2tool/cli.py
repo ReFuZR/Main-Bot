@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from .data import CBUF, FIELDS, GAMES, Catalog, Profile, strip_colors
+from .search import Search
 from .xbdm import Xbdm, XbdmError, encode
 
 SCAN = (0x82000000, 0x86000000)
@@ -49,7 +50,7 @@ class Shell(cmd.Cmd):
     def __init__(self, xb: Xbdm, profile: Profile, catalog: Catalog | None = None):
         super().__init__()
         self.xb, self.p, self.cat = xb, profile, catalog or Catalog()
-        self.prompt, self.hits, self.kind, self.warned = f"{profile.short}> ", [], "", False
+        self.prompt, self.search, self.positions, self.warned = f"{profile.short}> ", None, {}, False
         self.ask = input  # swapped out in tests
 
     def onecmd(self, line):
@@ -145,44 +146,36 @@ class Shell(cmd.Cmd):
         print(f"saved {name} = 0x{int(addr, 0):08X}")
 
     # -- finding addresses ------------------------------------------------------
-    def _scan(self, kind: str, value: str, start: int, end: int) -> list[int]:
-        pattern = encode(kind, value)
-        print(f"searching 0x{start:08X}-0x{end:08X} for {pattern.hex().upper()}")
-        return self.xb.scan(start, end, pattern, progress=progress())
-
-    def _refine(self, kind: str, value: str, hits: list[int]) -> list[int]:
-        pattern, kept = encode(kind, value), []
-        for addr in hits:
-            try:
-                if self.xb.read(addr, len(pattern)) == pattern:
-                    kept.append(addr)
-            except XbdmError:
-                pass
-        return kept
-
     def _show_hits(self):
-        print(f"{len(self.hits)} hit(s)", *(f"  0x{a:08X}" for a in self.hits[:20]), sep="\n")
-        if len(self.hits) > 20:
+        hits = self.search.hits
+        print(f"{self.search.count} hit(s)")
+        for a in (hits or [])[:20]:
+            print(f"  0x{a:08X}  {self.search.value(a)!r}")
+        if self.search.count > 20 or hits is None:
             print("  ... use 'refine' to narrow down")
-        if len(self.hits) == 1:
-            print(f"one hit, save it with: setaddr <field> 0x{self.hits[0]:08X}")
+        if self.search.count == 1:
+            print(f"one hit, save it with: setaddr <field> 0x{hits[0]:08X}")
 
     def do_find(self, arg):
-        """find <type> <value> [start end] - scan memory (type: hex/u32/i32/float/str)
+        """find <type> <value|?> [start end] - scan memory (type: hex/u32/i32/float/str)
 
-        Example: 'find str MyGamertag'. Then change the value in game and 'refine'."""
+        'find str MyGamertag' looks for a value. 'find float ?' remembers memory
+        for a value you can't see (like your position). Then change it in game and
+        'refine' with the new value, or with same/changed/more/less."""
         parts = shlex.split(arg)
         if len(parts) < 2:
-            raise ValueError("usage: find <type> <value> [start end]")
+            raise ValueError("usage: find <type> <value|?> [start end]")
         start, end = (int(parts[2], 0), int(parts[3], 0)) if len(parts) >= 4 else SCAN
-        self.kind, self.hits = parts[0], self._scan(parts[0], parts[1], start, end)
+        self.search = Search(self.xb, parts[0])
+        print(f"searching 0x{start:08X}-0x{end:08X} for {parts[1]}")
+        self.search.start(parts[1], start, end, progress())
         self._show_hits()
 
     def do_refine(self, arg):
-        """refine <value> - keep only previous hits that now hold <value>"""
-        if not self.hits:
+        """refine <value|same|changed|more|less> - narrow down the last 'find'"""
+        if self.search is None:
             raise ValueError("nothing to refine; run 'find' first")
-        self.hits = self._refine(self.kind, arg.strip(), self.hits)
+        self.search.refine(arg.strip())
         self._show_hits()
 
     def do_wizard(self, arg):
@@ -218,33 +211,40 @@ class Shell(cmd.Cmd):
     def _wizard_field(self, name: str, start: int, end: int):
         """True if saved, False if skipped, 'quit' to stop the wizard."""
         ftype, _, desc = FIELDS[name]
-        kind, hits = FIND_KIND.get(ftype, ftype), None
+        search = Search(self.xb, FIND_KIND.get(ftype, ftype))
+        hidden = " (or ? if you can't see it)" if ftype in ("i32", "u32", "float") else ""
         print(f"== {name} ({ftype}) - {desc.format(**self.p.info)}")
-        answer = self._ask(f"  current value of {name} in game: ")
+        answer, started = self._ask(f"  current value of {name} in game{hidden}: "), False
         while True:
             if answer in ("skip", "quit"):
                 print()
                 return answer == "quit" and "quit"
-            if hits and answer.startswith("pick "):
-                try:
-                    hits = [hits[int(answer.split()[1]) - 1]]
-                except (ValueError, IndexError):
+            if started and answer.startswith("pick "):
+                n = answer.split()[1]
+                if search.hits is not None and n.isdigit() and 1 <= int(n) <= len(search.hits):
+                    search.hits = search.hits[int(n) - 1:int(n)]
+                else:
                     print("  invalid pick")
+            elif started:
+                search.refine(answer)
             else:
-                hits = self._scan(kind, answer, start, end) if hits is None else self._refine(kind, answer, hits)
-            if not hits:
+                print(f"  searching 0x{start:08X}-0x{end:08X}...")
+                search.start(answer, start, end, progress())
+                started = True
+            if search.count == 0:
                 print("  no matches. Check the value (and the scan range) and retry later.")
                 return False
-            if len(hits) == 1:
-                self.p.save(name, hits[0])
-                print(f"  found it: {name} = 0x{hits[0]:08X} (saved)\n")
+            if search.count == 1:
+                self.p.save(name, search.hits[0])
+                print(f"  found it: {name} = 0x{search.hits[0]:08X} (saved)\n")
                 return True
-            print(f"  {len(hits)} matches")
-            if len(hits) <= 8:
-                for i, a in enumerate(hits, 1):
+            print(f"  {search.count} matches")
+            if search.hits is not None and search.count <= 8:
+                for i, a in enumerate(search.hits, 1):
                     print(f"   {i}) 0x{a:08X}  {self._preview(a)}")
                 print("  type 'pick N' to choose one of these, or keep narrowing:")
-            answer = self._ask(f"  change {name} in game, then type the new value: ")
+            how = "the new value" + (", or same/changed/more/less" if search.kind in ("i32", "u32", "float") else "")
+            answer = self._ask(f"  change {name} in game, then type {how}: ")
 
     def _preview(self, addr: int) -> str:
         try:
@@ -252,6 +252,22 @@ class Shell(cmd.Cmd):
         except XbdmError:
             return "(unreadable)"
         return f"{raw.hex(' ').upper()}  {printable(raw)}"
+
+    # -- save / load position ---------------------------------------------------
+    def do_savepos(self, arg):
+        """savepos [slot] - remember where you are (needs pos_x/pos_y/pos_z, see 'wizard pos_x pos_y pos_z')"""
+        slot = arg.strip() or "1"
+        self.positions[slot] = [self.xb.get(*self._field(f"pos_{c}")) for c in "xyz"]
+        print(f"saved position {slot}: " + ", ".join(f"{v:.1f}" for v in self.positions[slot]))
+
+    def do_loadpos(self, arg):
+        """loadpos [slot] - teleport back to a saved position (offline or a private match you host)"""
+        slot = arg.strip() or "1"
+        if slot not in self.positions:
+            raise LookupError(f"no position saved in slot {slot}; use 'savepos {slot}' first")
+        for c, v in zip("xyz", self.positions[slot]):
+            self.xb.put(self._field(f"pos_{c}")[0], "float", repr(v))
+        print(f"loaded position {slot}")
 
     # -- raw memory -------------------------------------------------------------
     def do_peek(self, arg):

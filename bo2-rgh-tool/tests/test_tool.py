@@ -8,6 +8,7 @@ from pathlib import Path
 from bo2tool import mock_console as mc
 from bo2tool.cli import Shell
 from bo2tool.data import CBUF, GAMES, Catalog, Profile, strip_colors
+from bo2tool.search import Search
 from bo2tool.xbdm import Xbdm, XbdmError, jrpc_arg
 
 
@@ -100,11 +101,34 @@ class WithConsole(unittest.TestCase):
         with self.assertRaises(XbdmError):
             self.xb.read(0x10000000, 4)
 
-    def test_scan_across_chunks_and_unmapped(self):
+    def test_search_across_chunks_and_unmapped(self):
         self.xb.write(0x8300FFFE, b"ABCD")
-        self.assertEqual(self.xb.scan(0x83000000, 0x83020000, b"ABCD"), [0x8300FFFE])
+        s = Search(self.xb, "str")
+        s.start("ABCD", 0x83000000, 0x83020000)
+        self.assertEqual(list(s.hits), [0x8300FFFE])
+        self.xb.write(0x8300FFFE, b"ABCE")
+        self.assertEqual(s.refine("changed"), 1)
+        self.assertEqual(s.refine("same"), 1)
+        with self.assertRaises(ValueError):
+            s.refine("more")
         self.xb.write(0x82000010, b"Needle")
-        self.assertEqual(self.xb.scan(0x81FE0000, 0x82010000, b"Needle"), [0x82000010])
+        s.start("Needle", 0x81FE0000, 0x82010000)
+        self.assertEqual(list(s.hits), [0x82000010])
+
+    def test_unknown_value_search(self):
+        z = mc.POS + 8
+        self.xb.put(0x83551F80, "float", "7")  # a decoy that also moves
+        s = Search(self.xb, "float")
+        self.assertEqual(s.start("?", 0x83550000, 0x83560000), 0x10000 // 4)
+        self.xb.put(z, "float", "80")          # walk up some stairs
+        self.xb.put(0x83551F80, "float", "9")
+        self.assertEqual(s.refine("more"), 2)
+        self.xb.put(z, "float", "60")          # come back down; decoy keeps going up
+        self.xb.put(0x83551F80, "float", "10")
+        self.assertEqual(s.refine("less"), 1)
+        self.assertEqual((list(s.hits), s.value(z)), ([z], 60.0))
+        with self.assertRaises(ValueError):
+            Search(self.xb, "str").start("?", 0x83550000, 0x83560000)
 
     # -- fields ----------------------------------------------------------------
     def test_find_setaddr_set_get(self):
@@ -119,7 +143,7 @@ class WithConsole(unittest.TestCase):
         self.run_cmd("find i32 10 0x83400000 0x83560000")
         self.xb.put(mc.PRESTIGE, "i32", "11")
         self.assertIn("one hit", self.run_cmd("refine 11"))
-        self.assertEqual(self.shell.hits, [mc.PRESTIGE])
+        self.assertEqual(list(self.shell.search.hits), [mc.PRESTIGE])
 
     def test_field_errors(self):
         self.assertIn("no address yet", self.run_cmd("get prestige"))
@@ -153,6 +177,19 @@ class WithConsole(unittest.TestCase):
         out = self.run_cmd("wizard --range 0x83500000 0x83600000", "skip", "quit")
         self.assertIn("not found: clan_tag, prestige, rank_xp, fov, kills", out)
         self.assertIn("no matches", self.run_cmd("wizard name --range 0x83500000 0x83600000", "NotThere"))
+
+    def test_wizard_unknown_value_then_save_and_load_position(self):
+        self.run_cmd(f"setaddr pos_x 0x{mc.POS:08X}")
+        self.run_cmd(f"setaddr pos_y 0x{mc.POS + 4:08X}")
+        out = self.run_cmd("wizard pos_z --range 0x83551F00 0x83551F10", "?",
+                           (lambda: self.xb.put(mc.POS + 8, "float", "90"), "more"))
+        self.assertIn("4 matches", out)
+        self.assertIn("found it: pos_z = 0x83551F08", out)
+        self.assertIn("100.0, 200.0, 90.0", self.run_cmd("savepos spawn"))
+        self.xb.write(mc.POS, bytes(12))  # walk somewhere else
+        self.run_cmd("loadpos spawn")
+        self.assertEqual([self.xb.get(mc.POS + i, "float") for i in (0, 4, 8)], [100.0, 200.0, 90.0])
+        self.assertIn("no position saved", self.run_cmd("loadpos 2"))
 
     # -- console commands ------------------------------------------------------
     def test_setup_then_cmd_and_preset(self):
