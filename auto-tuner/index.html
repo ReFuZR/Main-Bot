@@ -1,0 +1,1194 @@
+<title>Fuel &amp; Spark Auto-Tuner</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: workbench — inputs in a left rail, the tuned table owns the wide right column; stacks on phones. */
+:root {
+  --bg: #eceff2;
+  --surface: #ffffff;
+  --surface-2: #f5f7f9;
+  --line: #d3d9e0;
+  --fg: #16202b;
+  --muted: #5a6676;
+  --accent: #1d5bb8;
+  --accent-fg: #ffffff;
+  --add: #e07a2c;      /* cell got more fuel / higher value */
+  --cut: #2b7bd4;      /* cell got less fuel / timing pulled */
+  --seq-lo: #e6f0ea;
+  --seq-hi: #e7b450;
+  --warn-bg: #fff4e5;
+  --warn-fg: #8a4510;
+  --ok: #24724a;
+  --bad: #b42318;
+  --font-display: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10151b; --surface: #171f28; --surface-2: #1d2731; --line: #2b3745; --fg: #e5eaf0; --muted: #97a3b2;
+    --accent: #6fa3ff; --accent-fg: #0a1322; --add: #f08b3e; --cut: #4d96ea; --seq-lo: #1a2a23; --seq-hi: #8f6519;
+    --warn-bg: #2d2113; --warn-fg: #f3c48e; --ok: #5fcf93; --bad: #ff8a7f; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10151b; --surface: #171f28; --surface-2: #1d2731; --line: #2b3745; --fg: #e5eaf0; --muted: #97a3b2;
+  --accent: #6fa3ff; --accent-fg: #0a1322; --add: #f08b3e; --cut: #4d96ea; --seq-lo: #1a2a23; --seq-hi: #8f6519;
+  --warn-bg: #2d2113; --warn-fg: #f3c48e; --ok: #5fcf93; --bad: #ff8a7f; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 14px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 48px;
+}
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; letter-spacing: 0.01em; }
+h1 { font-size: 2rem; font-weight: 700; line-height: 1.1; }
+h2 { font-size: 1.15rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+p { margin: 0; }
+.wrap { max-width: 1440px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.top .sub { color: var(--muted); max-width: 70ch; }
+.banner {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 14px;
+  background: var(--warn-bg); color: var(--warn-fg); border-radius: 8px; font-weight: 500;
+}
+.banner[hidden] { display: none !important; }
+.layout { display: grid; grid-template-columns: minmax(300px, 400px) minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+.rail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.panel-head { display: flex; align-items: baseline; gap: 10px; }
+.step { font-family: var(--font-mono); font-size: 0.75rem; color: var(--accent); font-weight: 600; }
+.hint { color: var(--muted); font-size: 0.85rem; }
+label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; font-weight: 500; min-width: 0; }
+label.inline { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; }
+textarea, select, input[type="number"] {
+  font: inherit; color: var(--fg); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; width: 100%; min-width: 0;
+}
+textarea { font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.4; min-height: 130px; resize: vertical; white-space: pre; overflow: auto; }
+textarea:focus-visible, select:focus-visible, input:focus-visible, button:focus-visible, .seg label:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.seg { display: flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.seg label { flex: 1 1 auto; flex-direction: row; justify-content: center; align-items: center; padding: 7px 10px; cursor: pointer; font-weight: 500; border-right: 1px solid var(--line); background: var(--surface-2); text-align: center; }
+.seg label:last-child { border-right: 0; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label:has(input:checked) { background: var(--accent); color: var(--accent-fg); }
+button {
+  font: inherit; font-weight: 600; cursor: pointer; border-radius: 6px; padding: 7px 12px; border: 1px solid var(--line);
+  background: var(--surface-2); color: var(--fg);
+}
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button:hover { filter: brightness(1.05); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.status { font-size: 0.82rem; font-family: var(--font-mono); }
+.status.ok { color: var(--ok); }
+.status.bad { color: var(--bad); }
+.drop { border: 1.5px dashed var(--line); border-radius: 8px; padding: 14px; text-align: center; color: var(--muted); }
+.drop.over { border-color: var(--accent); color: var(--fg); }
+details summary { cursor: pointer; font-size: 0.85rem; color: var(--muted); }
+details[open] summary { margin-bottom: 6px; }
+.chan { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 6px 10px; align-items: center; }
+.chan .name { font-size: 0.82rem; font-weight: 500; }
+.chan .name small { display: block; font-weight: 400; color: var(--muted); font-size: 0.74rem; }
+.chan select { padding: 5px 7px; font-size: 0.82rem; }
+.results { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.stat .k { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 600; }
+.stat .v { font-family: var(--font-display); font-size: 1.6rem; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.stat .v small { font-size: 0.9rem; color: var(--muted); font-weight: 500; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.tabs button { padding: 5px 11px; font-size: 0.85rem; }
+.tabs button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); max-height: 70vh; overflow-y: auto; }
+table.map { border-collapse: separate; border-spacing: 0; font-family: var(--font-mono); font-size: 0.74rem; font-variant-numeric: tabular-nums; }
+table.map th, table.map td { padding: 4px 6px; text-align: right; white-space: nowrap; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+table.map th { background: var(--surface-2); color: var(--muted); font-weight: 600; position: sticky; z-index: 1; }
+table.map thead th { top: 0; }
+table.map tbody th { left: 0; }
+table.map thead th.corner { left: 0; z-index: 2; text-align: left; font-family: var(--font-body); font-size: 0.68rem; }
+table.map td.chg { box-shadow: inset 0 0 0 1.5px var(--hl, var(--accent)); font-weight: 600; }
+table.map td.nodata { color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 0.8rem; color: var(--muted); align-items: center; }
+.sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 5px; }
+.notes { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.notes li { padding: 7px 10px; border-radius: 6px; background: var(--surface-2); font-size: 0.85rem; border-left: 3px solid var(--line); }
+.notes li.warn { background: var(--warn-bg); color: var(--warn-fg); border-left-color: var(--add); }
+.goalbox { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.goalbox div { background: var(--surface-2); border-radius: 8px; padding: 9px 11px; }
+.goalbox b { font-family: var(--font-mono); font-size: 0.95rem; }
+.howto ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+kbd { font-family: var(--font-mono); font-size: 0.78rem; background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.copied { color: var(--ok); font-size: 0.82rem; font-weight: 600; }
+#copyFallback { min-height: 90px; }
+.safety { font-size: 0.82rem; color: var(--muted); max-width: 90ch; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Fuel &amp; Spark Auto-Tuner</h1>
+      <p class="sub">Paste a table from HP Tuners VCM Editor, load a VCM Scanner datalog, and get back a corrected table you can paste straight into the editor.</p>
+    </div>
+  </header>
+
+  <div class="banner" id="exampleBanner">
+    <span>Showing example data, not your car. Paste your own table and load your log to tune.</span>
+    <button type="button" id="clearExample">Clear example</button>
+  </div>
+
+  <main class="layout">
+    <section class="rail" aria-label="Inputs">
+
+      <div class="panel">
+        <div class="panel-head"><span class="step">STEP 1</span><h2>Table</h2></div>
+        <div class="seg" role="radiogroup" aria-label="Table type">
+          <label><input type="radio" name="ttype" id="tt-ve" value="ve" checked>VE table</label>
+          <label><input type="radio" name="ttype" id="tt-maf" value="maf">MAF airflow</label>
+          <label><input type="radio" name="ttype" id="tt-spark" value="spark">Spark</label>
+        </div>
+        <label for="tableText">Table copied with axes
+          <textarea id="tableText" spellcheck="false" placeholder="In VCM Editor: right-click the table → Copy with Axis, then paste here"></textarea>
+        </label>
+        <p class="status" id="tableStatus"></p>
+        <p class="hint" id="tableHint">In VCM Editor, open the table, right-click it and choose <b>Copy with Axis</b>, then paste here. The tuner needs the axis values to place your log data in the right cells.</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><span class="step">STEP 2</span><h2>Datalog</h2></div>
+        <div class="seg" role="radiogroup" aria-label="Data source" id="srcSeg">
+          <label><input type="radio" name="src" id="src-log" value="log" checked>Scanner log (CSV)</label>
+          <label data-only="fuel"><input type="radio" name="src" id="src-hist" value="hist">Histogram paste</label>
+        </div>
+        <div data-src="log" class="rail" style="gap:10px">
+          <div class="drop" id="drop">
+            <p>Drop CSV log files here or</p>
+            <p><input type="file" id="logFile" accept=".csv,.txt,.tsv,text/csv,text/plain" multiple></p>
+          </div>
+          <details>
+            <summary>Or paste the CSV text</summary>
+            <textarea id="logText" spellcheck="false" placeholder="Paste exported CSV log here"></textarea>
+          </details>
+          <p class="status" id="logStatus"></p>
+          <p class="hint">In VCM Scanner, open your log and use File → Export → CSV. Several logs can be loaded together.</p>
+        </div>
+        <div data-src="hist" class="rail" style="gap:10px" hidden>
+          <label for="histText">Fuel error % histogram (copied with axes)
+            <textarea id="histText" spellcheck="false" placeholder="Paste a VCM Scanner histogram of your AFR error % here"></textarea>
+          </label>
+          <label for="hitsText">Hit count histogram (optional, same layout)
+            <textarea id="hitsText" spellcheck="false" style="min-height:80px" placeholder="Optional: paste the matching hit count histogram"></textarea>
+          </label>
+          <label for="histSign">A positive error % means
+            <select id="histSign">
+              <option value="1">Lean: the cell needs more fuel</option>
+              <option value="-1">Rich: the cell needs less fuel</option>
+            </select>
+          </label>
+          <p class="status" id="histStatus"></p>
+        </div>
+      </div>
+
+      <div class="panel" data-src="log">
+        <div class="panel-head"><span class="step">STEP 3</span><h2>Channels</h2></div>
+        <p class="hint">Matched automatically from your log's column names. Change any that are wrong.</p>
+        <div class="chan" id="channels"><p class="hint">Load a log to see its channels.</p></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><span class="step">STEP 4</span><h2>Goal &amp; limits</h2></div>
+        <div class="grid2">
+          <label for="goal">Goal
+            <select id="goal"></select>
+          </label>
+          <label for="fuel">Fuel
+            <select id="fuel"></select>
+          </label>
+        </div>
+        <div class="grid2" data-only="fuel">
+          <label for="corrSource">Correct using
+            <select id="corrSource">
+              <option value="wb">Wideband O2</option>
+              <option value="trims">Fuel trims only</option>
+            </select>
+          </label>
+          <label for="target">Target fueling
+            <select id="target">
+              <option value="cmd">Commanded (from log)</option>
+              <option value="goal">Goal targets</option>
+            </select>
+          </label>
+        </div>
+        <label class="inline" data-only="fuel"><input type="checkbox" id="useTrims" checked> Include fuel trims with the wideband</label>
+        <div class="grid2" data-only="fuel">
+          <label for="strength">Correction strength %
+            <input type="number" id="strength" value="100" min="10" max="100" step="5">
+          </label>
+          <label for="maxChange">Max change per pass %
+            <input type="number" id="maxChange" value="10" min="1" max="30" step="1">
+          </label>
+          <label for="deadband">Ignore changes under %
+            <input type="number" id="deadband" value="0.5" min="0" max="5" step="0.1">
+          </label>
+          <label for="smooth">Smoothing
+            <select id="smooth">
+              <option value="1">Light</option>
+              <option value="0">Off</option>
+            </select>
+          </label>
+        </div>
+        <div class="grid2" data-only="spark">
+          <label for="krThresh">Act on knock above °
+            <input type="number" id="krThresh" value="0.5" min="0" max="5" step="0.1">
+          </label>
+          <label for="krMargin">Extra safety margin °
+            <input type="number" id="krMargin" value="0.5" min="0" max="4" step="0.25">
+          </label>
+          <label for="maxPull">Max pull per pass °
+            <input type="number" id="maxPull" value="4" min="0.5" max="10" step="0.5">
+          </label>
+          <label for="neighbors">Neighboring cells
+            <select id="neighbors">
+              <option value="1">Pull half as much</option>
+              <option value="0">Leave alone</option>
+            </select>
+          </label>
+        </div>
+        <div class="grid2" data-src="log">
+          <label for="minHits">Min samples per cell
+            <input type="number" id="minHits" value="10" min="1" max="500" step="1">
+          </label>
+          <label for="wbDelay" data-only="fuel">Wideband delay ms
+            <input type="number" id="wbDelay" value="100" min="0" max="1000" step="10">
+          </label>
+          <label for="minEct">Min coolant temp <span id="ectUnit">°C</span>
+            <input type="number" id="minEct" value="70" step="1">
+          </label>
+          <label for="tpsRate">Skip throttle moves over %/s
+            <input type="number" id="tpsRate" value="40" min="5" max="500" step="5">
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <section class="results" aria-label="Results">
+      <div class="stats" id="stats"></div>
+
+      <div class="panel">
+        <div class="row" style="justify-content:space-between">
+          <div class="tabs" id="views" role="group" aria-label="Table view"></div>
+          <div class="legend" id="legend"></div>
+        </div>
+        <div class="tablewrap" id="gridWrap"></div>
+        <div class="row">
+          <button type="button" class="primary" id="copyNew">Copy new table</button>
+          <button type="button" id="copyAxes">Copy with axes</button>
+          <button type="button" id="copyChange">Copy change table</button>
+          <span class="copied" id="copiedMsg" aria-live="polite"></span>
+        </div>
+        <textarea id="copyFallback" readonly hidden aria-label="Copied text"></textarea>
+      </div>
+
+      <div class="panel">
+        <h2>Notes on this pass</h2>
+        <ul class="notes" id="notes"></ul>
+      </div>
+
+      <div class="panel" data-only="fuel">
+        <h2>Fueling targets for your goal</h2>
+        <p class="hint" id="goalBlurb"></p>
+        <div class="goalbox" id="goalBox"></div>
+        <p class="hint">The VE and MAF corrections make the engine hit whatever the ECU commands. Set these targets in your Power Enrichment and base fueling tables so it commands the right mixture for your goal.</p>
+      </div>
+
+      <div class="panel howto">
+        <h2>Putting it back into VCM Editor</h2>
+        <ol id="howto"></ol>
+      </div>
+
+      <p class="safety">Check every change before you flash it. Run several logging passes with small changes rather than one big one, tune wide-open throttle only with a wideband sensor, and watch knock retard on every pull. This tool only ever removes spark timing; adding timing safely needs a dyno or an experienced tuner. Not affiliated with HP Tuners.</p>
+    </section>
+  </main>
+</div>
+
+<script>
+"use strict";
+/* ---------- constants ---------- */
+const GOALS = {
+  economy: { label: "Daily driver / economy", cruise: 1.00, wot: 0.88, krMargin: 0.5,
+    blurb: "Stoichiometric cruise for best mileage and catalyst life, with mild enrichment at wide-open throttle." },
+  street: { label: "Street performance", cruise: 1.00, wot: 0.86, krMargin: 0.5,
+    blurb: "Stoichiometric cruise with a little more enrichment under load for safer, stronger pulls." },
+  power: { label: "Max power (naturally aspirated)", cruise: 1.00, wot: 0.85, krMargin: 0.5,
+    blurb: "Best-power mixture for an NA engine is usually near lambda 0.85 to 0.87." },
+  boost: { label: "Boosted (turbo / supercharger)", cruise: 1.00, wot: 0.78, krMargin: 1.0,
+    blurb: "Richer under boost to keep combustion temperature and knock under control." },
+};
+const FUELS = {
+  gas: { label: "Gasoline", st: 14.7 },
+  e10: { label: "E10 pump gas", st: 14.1 },
+  e85: { label: "E85", st: 9.8 },
+};
+const NUM_RE = /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/;
+const isNum = (s) => NUM_RE.test(String(s).trim());
+
+const state = { type: "ve", src: "log", example: true, logs: [], log: null, mapping: {}, units: {}, view: "new", result: null, table: null, ectTouched: false };
+const $ = (s) => document.querySelector(s);
+
+/* ---------- parsing ---------- */
+function splitLines(text) { return String(text || "").replace(/\r/g, "").split("\n"); }
+function pickDelim(lines) {
+  const s = lines.filter((l) => l.trim()).slice(0, 60).join("\n");
+  if (s.includes("\t")) return "\t";
+  if (s.includes(",")) return ",";
+  if (s.includes(";")) return ";";
+  return /\s+/;
+}
+function splitRow(line, d) {
+  const parts = d instanceof RegExp ? line.trim().split(d) : line.split(d);
+  return parts.map((c) => c.trim().replace(/^"(.*)"$/, "$1").trim());
+}
+function lastFilled(r) { let n = r.length; while (n > 0 && r[n - 1] === "") n--; return n; }
+function decimalsOf(cells) {
+  let d = 0;
+  for (const c of cells) { const m = String(c).match(/\.(\d+)/); if (m) d = Math.max(d, m[1].length); }
+  return Math.min(d, 4);
+}
+function strictlyMonotonic(a) {
+  if (a.length < 2) return false;
+  const up = a[1] > a[0];
+  for (let i = 1; i < a.length; i++) if (up ? !(a[i] > a[i - 1]) : !(a[i] < a[i - 1])) return false;
+  return true;
+}
+
+/* Parse a 2-D table copied with axes (or a 1-D MAF style table). Blank cells become NaN. */
+function parseTable(text, oneD) {
+  let lines = splitLines(text).filter((l) => l.trim() !== "");
+  if (!lines.length) return { error: "Paste a table to start." };
+  const d = pickDelim(lines);
+  let rows = lines.map((l) => splitRow(l, d));
+  if (oneD) return parse1D(rows);
+  // drop title lines that hold a single cell above a wide table
+  while (rows.length > 2 && lastFilled(rows[0]) <= 1 && lastFilled(rows[1]) > 2) rows.shift();
+  const r0 = rows[0];
+  let colAxis, body, rowAxis, values, cells = [];
+  const r0n = lastFilled(r0);
+  if (!isNum(r0[0])) {
+    colAxis = [];
+    for (let i = 1; i < r0n; i++) { if (!isNum(r0[i])) break; colAxis.push(+r0[i]); }
+    body = rows.slice(1);
+  } else if (r0.slice(0, r0n).every(isNum) && rows.length > 1 && r0n === lastFilled(rows[1]) - 1) {
+    colAxis = r0.slice(0, r0n).map(Number);
+    body = rows.slice(1);
+  } else if (rows.every((r) => r.slice(0, lastFilled(r)).every(isNum))) {
+    const top = r0.slice(1, r0n).map(Number);
+    const left = rows.slice(1).map((r) => +r[0]);
+    if (strictlyMonotonic(top) && strictlyMonotonic(left)) { colAxis = top; body = rows.slice(1); }
+    else return { error: "No axis values found. In VCM Editor use right-click → Copy with Axis so the RPM and load values come along." };
+  } else {
+    return { error: "Couldn't read this table. Copy it from VCM Editor with right-click → Copy with Axis." };
+  }
+  if (colAxis.length < 2) return { error: "Couldn't find the column axis in the first row. Use Copy with Axis." };
+  rowAxis = []; values = [];
+  for (const r of body) {
+    if (!isNum(r[0])) continue;
+    rowAxis.push(+r[0]);
+    const vals = [];
+    for (let c = 0; c < colAxis.length; c++) {
+      const s = r[c + 1] ?? "";
+      if (isNum(s)) { vals.push(+s); cells.push(s); } else vals.push(NaN);
+    }
+    values.push(vals);
+  }
+  if (rowAxis.length < 2) return { error: "Couldn't find the row axis in the first column. Use Copy with Axis." };
+  return { rowAxis, colAxis, values, oneD: false, decimals: decimalsOf(cells) };
+}
+function parse1D(rows) {
+  const pairs = [];
+  for (const r of rows) {
+    const nums = r.filter((c) => c !== "");
+    if (nums.length >= 2 && isNum(nums[0]) && isNum(nums[1])) pairs.push([nums[0], nums[1]]);
+  }
+  let axis, vals;
+  if (pairs.length >= 3) { axis = pairs.map((p) => +p[0]); vals = pairs.map((p) => p[1]); }
+  else {
+    const numRows = rows.map((r) => r.filter((c) => isNum(c))).filter((r) => r.length >= 3);
+    if (numRows.length >= 2) { axis = numRows[0].map(Number); vals = numRows[1]; }
+    else return { error: "Couldn't read this table. Copy it from VCM Editor with right-click → Copy with Axis." };
+  }
+  const n = Math.min(axis.length, vals.length);
+  return { rowAxis: axis.slice(0, n), colAxis: [0], values: vals.slice(0, n).map((v) => [+v]), oneD: true, decimals: decimalsOf(vals) };
+}
+
+/* Parse a scanner CSV export. Handles plain header+data CSVs and the sectioned
+   [Channel Information] / [Channel Data] layout. Blank cells are forward-filled
+   because channels are often logged at different rates. */
+function parseLog(text) {
+  const lines = splitLines(text);
+  const mid = Math.floor(lines.length / 2);
+  const d = pickDelim(lines.slice(mid, mid + 40).concat(lines.slice(0, 40)));
+  let names = null, dataStart = -1;
+  const cdIdx = lines.findIndex((l) => /^\s*\[channel data\]/i.test(l));
+  if (cdIdx >= 0) {
+    const ciIdx = lines.findIndex((l) => /^\s*\[channel information\]/i.test(l));
+    const hdr = lines.slice(ciIdx >= 0 ? ciIdx + 1 : 0, cdIdx).filter((l) => l.trim()).map((l) => splitRow(l, d));
+    let best = null, bs = -1;
+    for (const r of hdr) { const s = r.filter((c) => /[a-z]/i.test(c)).length; if (s > bs) { bs = s; best = r; } }
+    names = best;
+    const unitRow = hdr.find((r) => r !== best && r.some((c) => /^(rpm|kpa|psi|%|°?[cf]|deg|°|g\/s|g|hz|s|sec|afr|lambda|eq|ratio|λ)$/i.test(c)));
+    if (names && unitRow) names = names.map((n, i) => (unitRow[i] && !n.toLowerCase().includes(unitRow[i].toLowerCase()) ? `${n} (${unitRow[i]})` : n));
+    dataStart = cdIdx + 1;
+  } else {
+    const rows = lines.map((l) => splitRow(l, d));
+    const numFrac = (r) => { const ne = r.filter((c) => c !== ""); return ne.length ? ne.filter(isNum).length / ne.length : 0; };
+    for (let i = 0; i < rows.length - 2; i++) {
+      if (rows[i].length >= 3 && numFrac(rows[i]) >= 0.6 && numFrac(rows[i + 1]) >= 0.6 && numFrac(rows[i + 2]) >= 0.6) {
+        for (let k = i - 1; k >= 0; k--) {
+          if (rows[k].filter((c) => c).length >= 2 && numFrac(rows[k]) < 0.5) {
+            names = rows[k];
+            if (k + 1 < i && rows[k + 1].some((c) => /[a-z%°]/i.test(c))) {
+              const u = rows[k + 1];
+              names = names.map((n, j) => (u[j] && !n.toLowerCase().includes(u[j].toLowerCase()) ? `${n} (${u[j]})` : n));
+            }
+            break;
+          }
+        }
+        dataStart = i; break;
+      }
+    }
+  }
+  if (dataStart < 0) return { error: "No numeric data found. Export the log from VCM Scanner as CSV." };
+  const firstData = lines.slice(dataStart).find((l) => l.trim());
+  const width = Math.max(names ? names.length : 0, firstData ? splitRow(firstData, d).length : 0);
+  if (!names) names = [];
+  names = Array.from({ length: width }, (_, i) => (names[i] && names[i].trim()) || `Column ${i + 1}`);
+  const seen = {};
+  names = names.map((n) => { seen[n] = (seen[n] || 0) + 1; return seen[n] > 1 ? `${n} #${seen[n]}` : n; });
+  const cols = names.map(() => []);
+  const last = names.map(() => NaN);
+  for (let i = dataStart; i < lines.length; i++) {
+    const l = lines[i];
+    if (!l.trim()) continue;
+    const r = splitRow(l, d);
+    if (!r.some(isNum)) continue;
+    for (let c = 0; c < width; c++) {
+      const s = r[c];
+      if (s !== undefined && s !== "" && isNum(s)) last[c] = +s;
+      cols[c].push(last[c]);
+    }
+  }
+  if (!cols[0] || cols[0].length < 2) return { error: "The log has fewer than 2 data rows." };
+  return { names, cols, n: cols[0].length };
+}
+function mergeLogs(logs) {
+  if (logs.length === 1) return logs[0];
+  const base = logs[0];
+  const cols = base.names.map((n, i) => base.cols[i].slice());
+  for (const lg of logs.slice(1)) {
+    base.names.forEach((n, i) => {
+      const j = lg.names.indexOf(n);
+      const src = j >= 0 ? lg.cols[j] : new Array(lg.n).fill(NaN);
+      for (const v of src) cols[i].push(v);
+    });
+  }
+  return { names: base.names, cols, n: cols[0].length };
+}
+
+/* ---------- channel guessing ---------- */
+const PAT = {
+  time: [/^(time|offset)\b/i, /\btime\b|offset/i],
+  rpm: [/engine (speed|rpm)/i, /\brpm\b/i],
+  map: [/manifold absolute/i, /\bmap\b/i, /manifold/i, /boost/i],
+  airmass: [/cylinder air ?mass/i, /air ?mass/i],
+  mafhz: [/(maf|mass air ?flow).*(freq|hz)/i, /freq.*(maf|mass air)/i, /\bhz\b/i],
+  tps: [/throttle position/i, /\btps\b/i, /throttle/i, /pedal/i],
+  ect: [/coolant/i, /\bect\b/i],
+  cmd: [/(command|desired|target).*(eq|afr|lambda|air.?fuel|fuel ratio)/i, /(eq|afr|lambda|air.?fuel).*(command|desired|target)/i],
+  meas: [/wide ?band/i, /\bwb\b|\bwbo2\b/i, /lambda|afr|air.?fuel|eq.?ratio|equivalence/i],
+  stft: [/short term.*(bank|bk|b) ?1/i, /short term/i, /\bstft/i],
+  ltft: [/long term.*(bank|bk|b) ?1/i, /long term/i, /\bltft/i],
+  kr: [/knock retard/i, /\bkr\b/i, /knock/i],
+};
+const NOT_CMD = [/command|desired|target/i];
+function findCol(names, pats, exclude = []) {
+  for (const p of pats) {
+    const i = names.findIndex((n) => p.test(n) && !exclude.some((e) => e.test(n)));
+    if (i >= 0) return i;
+  }
+  return -1;
+}
+function sampleMedian(arr) {
+  const s = [];
+  const step = Math.max(1, Math.floor(arr.length / 2000));
+  for (let i = 0; i < arr.length; i += step) if (Number.isFinite(arr[i])) s.push(arr[i]);
+  if (!s.length) return NaN;
+  s.sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+}
+function guessUnit(name, arr) {
+  if (/\beq\b|equivalence|eq ratio|eqr/i.test(name)) return "eq";
+  if (/lambda|λ/i.test(name)) return "lambda";
+  if (/afr|air.?fuel|a\/f/i.test(name)) {
+    const m = sampleMedian(arr);
+    return m > 4 ? "afr" : "lambda";
+  }
+  const m = sampleMedian(arr);
+  if (m > 4) return "afr";
+  return /ratio/i.test(name) ? "eq" : "lambda";
+}
+function axisRole(axis) {
+  const mx = Math.max(...axis), mn = Math.min(...axis);
+  if (state.type === "maf") return "mafhz";
+  if (mx >= 1000 && mx <= 12000 && mn < 2000) return "rpm";
+  if (mx <= 3.5) return "airmass";
+  return "map";
+}
+function autoMap(log, table) {
+  const m = {};
+  const n = log.names;
+  const pick = (role) => findCol(n, PAT[role]);
+  if (table) {
+    m.row = pick(axisRole(table.rowAxis));
+    if (!table.oneD) m.col = pick(axisRole(table.colAxis));
+  }
+  m.time = pick("time");
+  m.tps = pick("tps");
+  m.ect = pick("ect");
+  m.cmd = findCol(n, PAT.cmd);
+  m.meas = findCol(n, PAT.meas, NOT_CMD);
+  m.stft = pick("stft");
+  m.ltft = pick("ltft");
+  m.kr = pick("kr");
+  const units = {};
+  if (m.cmd >= 0) units.cmd = guessUnit(n[m.cmd], log.cols[m.cmd]);
+  if (m.meas >= 0) units.meas = guessUnit(n[m.meas], log.cols[m.meas]);
+  return { m, units };
+}
+
+/* ---------- math ---------- */
+function locate(ax, x) {
+  const n = ax.length;
+  if (n === 1) return [[0, 1]];
+  const asc = ax[n - 1] >= ax[0];
+  if (asc ? x <= ax[0] : x >= ax[0]) return [[0, 1]];
+  if (asc ? x >= ax[n - 1] : x <= ax[n - 1]) return [[n - 1, 1]];
+  for (let i = 0; i < n - 1; i++) {
+    const a = ax[i], b = ax[i + 1];
+    if ((x - a) * (x - b) <= 0) { const t = b === a ? 0 : (x - a) / (b - a); return [[i, 1 - t], [i + 1, t]]; }
+  }
+  return [[0, 1]];
+}
+function toLambda(v, unit, st) {
+  if (!Number.isFinite(v) || v <= 0) return NaN;
+  if (unit === "eq") return 1 / v;
+  if (unit === "afr") return v / st;
+  return v;
+}
+const zeros = (r, c, v = 0) => Array.from({ length: r }, () => new Array(c).fill(v));
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const roundTo = (v, d) => { const f = 10 ** d; return Math.round(v * f) / f; };
+
+function readSettings() {
+  const num = (id) => parseFloat($("#" + id).value);
+  return {
+    goal: GOALS[$("#goal").value], st: FUELS[$("#fuel").value].st,
+    corrSource: $("#corrSource").value, target: $("#target").value, useTrims: $("#useTrims").checked,
+    strength: clamp(num("strength") || 100, 1, 100) / 100, maxChange: (num("maxChange") || 10) / 100,
+    deadband: (num("deadband") || 0) / 100, smooth: $("#smooth").value === "1",
+    minHits: Math.max(1, num("minHits") || 1), wbDelay: Math.max(0, num("wbDelay") || 0) / 1000,
+    minEct: num("minEct"), tpsRate: num("tpsRate") || 40,
+    krThresh: num("krThresh") || 0, krMargin: num("krMargin") || 0, maxPull: num("maxPull") || 4,
+    neighbors: $("#neighbors").value === "1",
+  };
+}
+
+/* Filter samples and spread each one over the four surrounding cells (bilinear weights). */
+function binLog(T, log, map, s, sampleValue) {
+  const nr = T.rowAxis.length, nc = T.colAxis.length;
+  const W = zeros(nr, nc), S = zeros(nr, nc), MX = zeros(nr, nc, -Infinity);
+  const col = (k) => (map[k] >= 0 && map[k] !== undefined ? log.cols[map[k]] : null);
+  const rowCh = col("row"), colCh = T.oneD ? null : col("col");
+  const time = col("time"), tps = col("tps"), ect = col("ect");
+  const drop = { missing: 0, cold: 0, transient: 0, invalid: 0 };
+  let used = 0, holdUntil = -Infinity, back = 0;
+  const tAt = (k) => (time ? time[k] : k * 0.05);
+  for (let i = 0; i < log.n; i++) {
+    const r = rowCh[i], c = colCh ? colCh[i] : 0;
+    if (!Number.isFinite(r) || !Number.isFinite(c)) { drop.missing++; continue; }
+    if (ect && Number.isFinite(s.minEct) && ect[i] < s.minEct) { drop.cold++; continue; }
+    if (tps && i > 0) {
+      // throttle rate over a ~0.2 s window so sensor jitter doesn't count as a transient
+      const t = tAt(i);
+      if (back > i || tAt(back) > t) back = i;
+      while (back < i && t - tAt(back + 1) >= 0.2) back++;
+      const dt = t - tAt(back);
+      if (dt > 0.05 && dt < 2 && Number.isFinite(tps[i]) && Number.isFinite(tps[back]) && Math.abs(tps[i] - tps[back]) / dt > s.tpsRate) holdUntil = t + 0.3;
+      if (t < holdUntil) { drop.transient++; continue; }
+    }
+    const v = sampleValue(i);
+    if (v === null || !Number.isFinite(v)) { drop.invalid++; continue; }
+    used++;
+    for (const [ri, wr] of locate(T.rowAxis, r)) for (const [ci, wc] of locate(T.colAxis, c)) {
+      const w = wr * wc;
+      if (w <= 0) continue;
+      W[ri][ci] += w; S[ri][ci] += w * v;
+      if (w >= 0.25 && v > MX[ri][ci]) MX[ri][ci] = v;
+    }
+  }
+  return { W, S, MX, drop, used };
+}
+
+function delayIndex(log, map, delay) {
+  const time = map.time >= 0 ? log.cols[map.time] : null;
+  const idx = new Int32Array(log.n);
+  if (!time || delay <= 0) { for (let i = 0; i < log.n; i++) idx[i] = i; return idx; }
+  let j = 0;
+  for (let i = 0; i < log.n; i++) {
+    if (j < i) j = i;
+    while (j < log.n - 1 && time[j] < time[i] + delay && time[j + 1] >= time[j]) j++;
+    idx[i] = time[j] >= time[i] ? j : i;
+  }
+  return idx;
+}
+
+function fuelFromLog(T, log, map, units, s) {
+  const notes = [];
+  const col = (k) => (map[k] >= 0 && map[k] !== undefined ? log.cols[map[k]] : null);
+  const meas = col("meas"), cmd = col("cmd"), stft = col("stft"), ltft = col("ltft"), tps = col("tps");
+  const loadCh = T.oneD ? null : col("col");
+  const loadIsMap = !T.oneD && map.col >= 0 && /map|manifold|kpa|boost/i.test(log.names[map.col] || "");
+  const useWb = s.corrSource === "wb";
+  if (useWb && !meas) return { error: "Pick the wideband channel in Step 3, or switch “Correct using” to Fuel trims only." };
+  if (!useWb && !stft && !ltft) return { error: "Pick at least one fuel trim channel in Step 3." };
+  const useCmd = s.target === "cmd" && cmd;
+  if (useWb && !useCmd) notes.push({ warn: true, t: s.target === "cmd"
+    ? "No commanded fuel channel found, so the tuner assumes the ECU was commanding your goal targets. Log Commanded EQ Ratio for accurate results."
+    : "Using goal targets instead of the commanded fuel in the log. This is only accurate if the ECU was already commanding those targets." });
+  if (!useWb) notes.push({ warn: true, t: "Fuel trims only correct where the ECU was in closed loop (part throttle). Leave wide-open throttle cells for a wideband pass." });
+  const di = delayIndex(log, map, useWb ? s.wbDelay : 0);
+  const trims = (i) => 1 + ((stft && Number.isFinite(stft[i]) ? stft[i] : 0) + (ltft && Number.isFinite(ltft[i]) ? ltft[i] : 0)) / 100;
+  const pe = (i) => (tps && tps[i] >= 75) || (!tps && loadIsMap && loadCh[i] >= 90);
+  const val = (i) => {
+    let ratio;
+    if (useWb) {
+      const lm = toLambda(meas[di[i]], units.meas, s.st);
+      if (!(lm > 0.55 && lm < 1.45)) return null; // decel fuel cut or sensor fault
+      const lt = useCmd ? toLambda(cmd[i], units.cmd, s.st) : (pe(i) ? s.goal.wot : s.goal.cruise);
+      if (!(lt > 0.5 && lt < 1.5)) return null;
+      ratio = lm / lt;
+      if (s.useTrims && (stft || ltft)) ratio *= trims(i);
+    } else {
+      ratio = trims(i);
+    }
+    if (!(ratio > 0.7 && ratio < 1.3)) return null;
+    return ratio;
+  };
+  const b = binLog(T, log, map, s, val);
+  const nr = T.rowAxis.length, nc = T.colAxis.length;
+  const mean = zeros(nr, nc, NaN);
+  for (let r = 0; r < nr; r++) for (let c = 0; c < nc; c++) if (b.W[r][c] >= s.minHits) mean[r][c] = b.S[r][c] / b.W[r][c];
+  const dropTxt = [];
+  if (b.drop.cold) dropTxt.push(`${b.drop.cold.toLocaleString()} cold-engine`);
+  if (b.drop.transient) dropTxt.push(`${b.drop.transient.toLocaleString()} during quick throttle moves`);
+  if (b.drop.invalid) dropTxt.push(`${b.drop.invalid.toLocaleString()} decel fuel cut or out-of-range readings`);
+  if (b.drop.missing) dropTxt.push(`${b.drop.missing.toLocaleString()} missing axis values`);
+  if (dropTxt.length) notes.push({ t: `Skipped samples: ${dropTxt.join(", ")}.` });
+  return { mean, W: b.W, used: b.used, total: log.n, notes };
+}
+
+function fuelFromHist(T, histText, hitsText, sign, s) {
+  const H = parseTable(histText, T.oneD);
+  if (H.error) return { error: "Histogram: " + H.error };
+  if (H.rowAxis.length !== T.rowAxis.length || H.colAxis.length !== T.colAxis.length)
+    return { error: `Histogram is ${H.rowAxis.length}×${H.colAxis.length} but the table is ${T.rowAxis.length}×${T.colAxis.length}. Set up the histogram with the same axes as the table.` };
+  let Hits = null;
+  if (hitsText.trim()) {
+    Hits = parseTable(hitsText, T.oneD);
+    if (Hits.error || Hits.rowAxis.length !== T.rowAxis.length || Hits.colAxis.length !== T.colAxis.length) {
+      return { error: "Hit count histogram doesn't match the table layout." };
+    }
+  }
+  const nr = T.rowAxis.length, nc = T.colAxis.length;
+  const mean = zeros(nr, nc, NaN), W = zeros(nr, nc);
+  let used = 0;
+  for (let r = 0; r < nr; r++) for (let c = 0; c < nc; c++) {
+    const e = H.values[r][c];
+    if (!Number.isFinite(e)) continue;
+    const hits = Hits ? Hits.values[r][c] : s.minHits;
+    if (!Number.isFinite(hits) || hits < s.minHits) { W[r][c] = Number.isFinite(hits) ? hits : 0; continue; }
+    W[r][c] = hits; used += hits;
+    mean[r][c] = 1 + (sign * e) / 100;
+  }
+  return { mean, W, used, total: used, notes: Hits ? [] : [{ t: "No hit counts pasted, so every cell with an error value is trusted equally." }] };
+}
+
+function finalizeFuel(T, base, s) {
+  const nr = T.rowAxis.length, nc = T.colAxis.length;
+  let m = base.mean;
+  if (s.smooth) {
+    m = base.mean.map((row, r) => row.map((v, c) => {
+      if (!Number.isFinite(v)) return v;
+      let sw = 2 * base.W[r][c], sv = sw * v;
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+        if (!dr && !dc) continue;
+        const vv = base.mean[r + dr]?.[c + dc];
+        if (vv !== undefined && Number.isFinite(vv)) { const w = base.W[r + dr][c + dc] * 0.5; sw += w; sv += w * vv; }
+      }
+      return sw > 0 ? sv / sw : v;
+    }));
+  }
+  const change = zeros(nr, nc, NaN), err = zeros(nr, nc, NaN), out = T.values.map((r) => r.slice());
+  let changed = 0, limited = 0, sumAbs = 0, maxUp = 0, maxDn = 0, covered = 0;
+  for (let r = 0; r < nr; r++) for (let c = 0; c < nc; c++) {
+    const v = m[r][c];
+    if (!Number.isFinite(v)) continue;
+    covered++;
+    err[r][c] = (base.mean[r][c] - 1) * 100;
+    let p = (v - 1) * s.strength;
+    if (Math.abs(p) > s.maxChange) { p = Math.sign(p) * s.maxChange; limited++; }
+    if (Math.abs(p) < s.deadband || !Number.isFinite(T.values[r][c])) { change[r][c] = 0; continue; }
+    const nv = roundTo(T.values[r][c] * (1 + p), T.decimals);
+    out[r][c] = nv;
+    const real = T.values[r][c] ? (nv / T.values[r][c] - 1) * 100 : 0;
+    change[r][c] = real;
+    if (Math.abs(real) > 0) { changed++; sumAbs += Math.abs(real); maxUp = Math.max(maxUp, real); maxDn = Math.min(maxDn, real); }
+  }
+  const notes = base.notes.slice();
+  if (limited) notes.push({ warn: true, t: `${limited} cell${limited > 1 ? "s" : ""} hit the ${Math.round(s.maxChange * 100)}% max change. Flash this table, log again, and run another pass.` });
+  if (!covered) notes.push({ warn: true, t: `No cell reached ${s.minHits} samples. Log more driving, or lower “Min samples per cell”.` });
+  return { out, change, err, W: base.W, unit: "%", changed, limited, covered, avg: changed ? sumAbs / changed : 0, maxUp, maxDn, used: base.used, total: base.total, notes };
+}
+
+function sparkFromLog(T, log, map, s) {
+  const kr = map.kr >= 0 ? log.cols[map.kr] : null;
+  if (!kr) return { error: "Pick the knock retard channel in Step 3." };
+  const b = binLog(T, log, map, s, (i) => (Number.isFinite(kr[i]) && kr[i] >= 0 && kr[i] < 25 ? kr[i] : null));
+  const nr = T.rowAxis.length, nc = T.colAxis.length;
+  const pull = zeros(nr, nc), out = T.values.map((r) => r.slice()), change = zeros(nr, nc, NaN), err = zeros(nr, nc, NaN);
+  let knockCells = 0;
+  for (let r = 0; r < nr; r++) for (let c = 0; c < nc; c++) {
+    if (b.W[r][c] > 0) err[r][c] = Math.max(0, b.MX[r][c]);
+    const k = b.MX[r][c];
+    if (k > s.krThresh) {
+      knockCells++;
+      const p = Math.min(s.maxPull, k + s.krMargin);
+      pull[r][c] = Math.max(pull[r][c], p);
+      if (s.neighbors) for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+        if ((!dr && !dc) || pull[r + dr] === undefined || pull[r + dr][c + dc] === undefined) continue;
+        pull[r + dr][c + dc] = Math.max(pull[r + dr][c + dc], p / 2);
+      }
+    }
+  }
+  let changed = 0, sumAbs = 0, maxDn = 0, covered = 0;
+  for (let r = 0; r < nr; r++) for (let c = 0; c < nc; c++) {
+    if (b.W[r][c] >= s.minHits) covered++;
+    if (pull[r][c] > 0 && Number.isFinite(T.values[r][c])) {
+      const nv = roundTo(T.values[r][c] - pull[r][c], T.decimals);
+      out[r][c] = nv;
+      change[r][c] = nv - T.values[r][c];
+      changed++; sumAbs += -change[r][c]; maxDn = Math.min(maxDn, change[r][c]);
+    } else if (b.W[r][c] > 0) change[r][c] = 0;
+  }
+  const notes = [];
+  notes.push(knockCells
+    ? { warn: true, t: `Knock showed up in ${knockCells} cell${knockCells > 1 ? "s" : ""}. Timing was pulled there by the knock amount plus your ${s.krMargin}° margin${s.neighbors ? ", and half that in the cells around them" : ""}.` }
+    : { t: `No knock above ${s.krThresh}° in this log, so the spark table is unchanged. The tuner never adds timing.` });
+  if (b.drop.cold || b.drop.transient) notes.push({ t: `Skipped ${(b.drop.cold + b.drop.transient).toLocaleString()} cold-engine or quick-throttle samples.` });
+  return { out, change, err, W: b.W, unit: "°", changed, limited: 0, covered, avg: changed ? sumAbs / changed : 0, maxUp: 0, maxDn, used: b.used, total: log.n, notes };
+}
+
+/* ---------- example data (clearly marked in the UI) ---------- */
+function rng(seed) { return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function fmtTable(rowAxis, colAxis, vals, d, oneD) {
+  if (oneD) return rowAxis.map((a, i) => `${a}\t${vals[i][0].toFixed(d)}`).join("\n");
+  const head = ["RPM \\ kPa", ...colAxis].join("\t");
+  return [head, ...rowAxis.map((a, i) => [a, ...vals[i].map((v) => v.toFixed(d))].join("\t"))].join("\n");
+}
+function genExample(type) {
+  const R = rng(11);
+  const gauss = () => { let u = 0; for (let i = 0; i < 6; i++) u += R(); return (u - 3) / 1.0; };
+  const rpmAx = []; for (let r = 400; r <= 6800; r += 400) rpmAx.push(r);
+  const mapAx = []; for (let m = 15; m <= 105; m += 10) mapAx.push(m);
+  const hzAx = []; for (let h = 1500; h <= 11500; h += 250) hzAx.push(h);
+  let tableText, factor;
+  if (type === "ve") {
+    const v = rpmAx.map((r) => mapAx.map((m) => 0.75 + 1.75 * Math.pow(m / 105, 0.5) * (0.72 + 0.28 * Math.sin(Math.PI * Math.min(r, 6400) / 7600))));
+    tableText = fmtTable(rpmAx, mapAx, v, 3);
+    factor = (r, m) => 1 + 0.05 * Math.sin(r / 1100) + 0.035 * ((m - 60) / 45) - 0.02 * Math.cos(m / 18);
+  } else if (type === "spark") {
+    const v = rpmAx.map((r) => mapAx.map((m) => 14 + 20 * Math.sqrt(Math.min(r, 5600) / 5600) * (1 - ((m - 15) / 90) * 0.5)));
+    tableText = fmtTable(rpmAx, mapAx, v, 1);
+    factor = () => 1;
+  } else {
+    const v = hzAx.map((h) => [1.4 * Math.exp((h - 1500) / 1750)]);
+    tableText = fmtTable(hzAx, null, v, 2, true);
+    factor = (r, m, hz) => 1 + 0.055 * Math.sin(hz / 1300) - 0.02;
+  }
+  const head = ["Time (s)", "Engine RPM (rpm)", "Manifold Absolute Pressure (kPa)", "Throttle Position (%)", "Engine Coolant Temp (°C)", "Mass Airflow Frequency (Hz)", "Commanded EQ Ratio", "Wideband EQ Ratio", "Knock Retard (°)"];
+  const lines = [head.join(",")];
+  let rpm = 800, map = 30, tr = 800, tm = 30, next = 0;
+  const hist = [];
+  const dt = 0.05;
+  for (let i = 0; i < 18000; i++) {
+    const t = i * dt;
+    if (t >= next) { tm = 18 + R() * 87; tr = 700 + R() * 5900; if (R() < 0.12) { tm = 18; tr = 1800 + R() * 2500; } next = t + 2 + R() * 6; }
+    rpm += (tr - rpm) * 0.03; map += (tm - map) * 0.06;
+    const tps = clamp((map - 20) / 80 * 100 + gauss() * 0.4, 0, 100);
+    const ect = 45 + 45 * (1 - Math.exp(-t / 120));
+    const hz = 1700 + 9600 * Math.sqrt(clamp(rpm * map / (6600 * 105), 0, 1));
+    const cmdEq = tps >= 75 ? 1 / 0.86 : 1.0;
+    const f = factor(rpm, map, hz);
+    let measEq = cmdEq / (f * (1 + gauss() * 0.012));
+    if (tm <= 18 && map < 24 && rpm > 1500) measEq = 0.25 + R() * 0.05; // decel fuel cut
+    let kr = 0;
+    if (type === "spark" && map > 78 && rpm > 2300 && rpm < 4500 && R() < 0.18) kr = 1 + R() * 2.5;
+    hist.push(measEq);
+    const lagged = hist[Math.max(0, hist.length - 3)];
+    lines.push([t.toFixed(2), rpm.toFixed(0), map.toFixed(1), tps.toFixed(1), ect.toFixed(1), hz.toFixed(0), cmdEq.toFixed(3), lagged.toFixed(3), kr.toFixed(1)].join(","));
+  }
+  return { tableText, logText: lines.join("\n") };
+}
+
+/* ---------- UI ---------- */
+function fillSelect(sel, entries, value) { sel.innerHTML = entries.map(([v, l]) => `<option value="${v}">${l}</option>`).join(""); if (value !== undefined) sel.value = value; }
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function isFuel() { return state.type !== "spark"; }
+
+function applyVisibility() {
+  document.querySelectorAll("[data-only]").forEach((e) => { e.hidden = (e.dataset.only === "fuel") !== isFuel(); });
+  if (!isFuel() && state.src === "hist") { state.src = "log"; $("#src-log").checked = true; }
+  document.querySelectorAll("[data-src]").forEach((e) => { if (e.dataset.only && e.hidden) return; e.hidden = e.dataset.src !== state.src; });
+  document.querySelectorAll("[data-only]").forEach((e) => { if (!e.hidden && e.dataset.src && e.dataset.src !== state.src) e.hidden = true; });
+  $("#tableHint").innerHTML = state.type === "maf"
+    ? "Open the MAF Airflow vs Frequency table, right-click → <b>Copy with Axis</b>, and paste it here. Rows are frequency (Hz), values are airflow (g/s)."
+    : "In VCM Editor, open the table, right-click it and choose <b>Copy with Axis</b>, then paste here. The tuner needs the axis values to place your log data in the right cells.";
+}
+
+function roleList() {
+  const T = state.table && !state.table.error ? state.table : null;
+  const oneD = state.type === "maf";
+  const r = [];
+  const axisName = (ax) => { if (!ax) return ""; const role = axisRole(ax); return { rpm: "RPM", map: "MAP (kPa)", airmass: "airmass", mafhz: "MAF frequency (Hz)" }[role]; };
+  if (oneD) r.push({ k: "row", label: "Table axis", hint: T ? `${axisName(T.rowAxis)}, ${T.rowAxis[0]}–${T.rowAxis.at(-1)}` : "" });
+  else {
+    r.push({ k: "row", label: "Row axis", hint: T ? `${axisName(T.rowAxis)}, ${T.rowAxis[0]}–${T.rowAxis.at(-1)}` : "" });
+    r.push({ k: "col", label: "Column axis", hint: T ? `${axisName(T.colAxis)}, ${T.colAxis[0]}–${T.colAxis.at(-1)}` : "" });
+  }
+  if (isFuel()) {
+    r.push({ k: "meas", label: "Wideband", unit: true });
+    r.push({ k: "cmd", label: "Commanded fuel", unit: true });
+    r.push({ k: "stft", label: "Short-term trim", hint: "%" });
+    r.push({ k: "ltft", label: "Long-term trim", hint: "%" });
+  } else r.push({ k: "kr", label: "Knock retard", hint: "degrees" });
+  r.push({ k: "time", label: "Time", hint: "seconds" });
+  r.push({ k: "tps", label: "Throttle position", hint: "%" });
+  r.push({ k: "ect", label: "Coolant temp" });
+  return r;
+}
+
+function renderChannels() {
+  const box = $("#channels");
+  const log = state.log;
+  if (!log) { box.innerHTML = '<p class="hint">Load a log to see its channels.</p>'; return; }
+  const opts = [[-1, "— none —"], ...log.names.map((n, i) => [i, esc(n)])];
+  let html = "";
+  for (const role of roleList()) {
+    html += `<div class="name">${role.label}${role.hint ? `<small>${esc(role.hint)}</small>` : ""}</div>`;
+    html += `<div class="row" style="flex-wrap:nowrap"><select id="ch-${role.k}" data-role="${role.k}" aria-label="${role.label} channel">${opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select>`;
+    if (role.unit) html += `<select id="un-${role.k}" data-unit="${role.k}" aria-label="${role.label} units" style="width:auto"><option value="eq">EQ</option><option value="lambda">λ</option><option value="afr">AFR</option></select>`;
+    html += "</div>";
+  }
+  box.innerHTML = html;
+  box.querySelectorAll("select[data-role]").forEach((sel) => {
+    const k = sel.dataset.role;
+    sel.value = String(state.mapping[k] ?? -1);
+    sel.addEventListener("change", () => {
+      state.mapping[k] = +sel.value;
+      if ((k === "meas" || k === "cmd") && +sel.value >= 0) { state.units[k] = guessUnit(log.names[+sel.value], log.cols[+sel.value]); renderChannels(); }
+      run();
+    });
+  });
+  box.querySelectorAll("select[data-unit]").forEach((sel) => {
+    const k = sel.dataset.unit;
+    sel.value = state.units[k] || "lambda";
+    sel.addEventListener("change", () => { state.units[k] = sel.value; run(); });
+  });
+}
+
+function setLog(logs, label) {
+  const ok = logs.filter((l) => !l.error);
+  if (!ok.length) { state.log = null; $("#logStatus").className = "status bad"; $("#logStatus").textContent = logs[0]?.error || "Couldn't read that log."; renderChannels(); run(); return; }
+  state.logs = ok;
+  state.log = mergeLogs(ok);
+  remap();
+  const ectI = state.mapping.ect;
+  if (ectI >= 0 && !state.ectTouched) {
+    const med = sampleMedian(state.log.cols[ectI]);
+    const f = med > 125;
+    $("#minEct").value = f ? 160 : 70;
+    $("#ectUnit").textContent = f ? "°F" : "°C";
+  }
+  $("#logStatus").className = "status ok";
+  $("#logStatus").textContent = `${label}: ${state.log.n.toLocaleString()} samples, ${state.log.names.length} channels`;
+  renderChannels();
+  run();
+}
+function remap() {
+  if (!state.log) return;
+  const { m, units } = autoMap(state.log, state.table && !state.table.error ? state.table : null);
+  state.mapping = m; state.units = units;
+  const hasTrims = m.stft >= 0 || m.ltft >= 0;
+  $("#useTrims").checked = hasTrims;
+}
+
+function parseTableInput() {
+  state.table = parseTable($("#tableText").value, state.type === "maf");
+  const st = $("#tableStatus");
+  if (state.table.error) { st.className = "status bad"; st.textContent = state.table.error; }
+  else {
+    const T = state.table;
+    st.className = "status ok";
+    st.textContent = T.oneD ? `${T.rowAxis.length}-cell table, axis ${T.rowAxis[0]}–${T.rowAxis.at(-1)}` : `${T.rowAxis.length} × ${T.colAxis.length} table, rows ${T.rowAxis[0]}–${T.rowAxis.at(-1)}, columns ${T.colAxis[0]}–${T.colAxis.at(-1)}`;
+  }
+}
+
+function run() {
+  const T = state.table;
+  const s = readSettings();
+  renderGoal(s);
+  renderHowto();
+  if (!T || T.error) { state.result = null; renderResult(null, T && T.error ? T.error : "Paste a table in Step 1."); return; }
+  let res;
+  if (state.type === "spark") {
+    if (!state.log) { renderResult({ original: true }, "Load a datalog with knock retard to check this spark table."); return; }
+    res = sparkFromLog(T, state.log, state.mapping, s);
+  } else if (state.src === "hist") {
+    if (!$("#histText").value.trim()) { renderResult({ original: true }, "Paste a fuel error histogram in Step 2."); return; }
+    const base = fuelFromHist(T, $("#histText").value, $("#hitsText").value, +$("#histSign").value, s);
+    $("#histStatus").className = base.error ? "status bad" : "status ok";
+    $("#histStatus").textContent = base.error || "Histogram matches the table layout.";
+    res = base.error ? base : finalizeFuel(T, base, s);
+  } else {
+    if (!state.log) { renderResult({ original: true }, "Load a datalog in Step 2 to tune this table."); return; }
+    if (!(state.mapping.row >= 0) || (!T.oneD && !(state.mapping.col >= 0))) { renderResult({ original: true }, "Pick the log channels that match the table's axes in Step 3."); return; }
+    const base = fuelFromLog(T, state.log, state.mapping, state.units, s);
+    res = base.error ? base : finalizeFuel(T, base, s);
+  }
+  if (res.error) { state.result = null; renderResult({ original: true }, res.error); return; }
+  state.result = res;
+  renderResult(res);
+}
+
+function renderGoal(s) {
+  const g = s.goal, st = s.st;
+  $("#goalBlurb").textContent = g.blurb;
+  const cell = (k, lam) => `<div><span class="hint">${k}</span><br><b>λ ${lam.toFixed(2)}</b> · <b>${(lam * st).toFixed(1)}:1</b> · <b>EQ ${(1 / lam).toFixed(2)}</b></div>`;
+  $("#goalBox").innerHTML = cell("Cruise and part throttle", g.cruise) + cell("Wide-open throttle / boost", g.wot);
+}
+
+function renderHowto() {
+  const steps = state.type === "spark"
+    ? ["Open the same spark table in VCM Editor.", "Click the top-left cell of the table body (not an axis cell).", "Click <b>Copy new table</b> here, then press <kbd>Ctrl</kbd>+<kbd>V</kbd> in the editor.", "Or select the whole table, click <b>Copy change table</b>, and use Paste Special → <b>Add</b>.", "Save as a new file, flash, and log again to confirm the knock is gone."]
+    : ["Open the same table in VCM Editor.", "Click the top-left cell of the table body (not an axis cell).", "Click <b>Copy new table</b> here, then press <kbd>Ctrl</kbd>+<kbd>V</kbd> in the editor.", "Or select the whole table, click <b>Copy change table</b>, and use Paste Special → <b>Multiply by %</b> (or <b>Multiply by % - Half</b> for a gentler pass).", "Save as a new file, flash, log again, and repeat until the changes get small (under about 2%)."];
+  $("#howto").innerHTML = steps.map((t) => `<li>${t}</li>`).join("");
+}
+
+const VIEWS = {
+  new: "New table", change: "Change", orig: "Original", hits: "Samples", err: "Measured error",
+};
+function renderResult(res, message) {
+  const T = state.table && !state.table.error ? state.table : null;
+  const fuel = isFuel();
+  const statsEl = $("#stats");
+  if (res && !res.original) {
+    const u = res.unit;
+    const cov = T ? Math.round((res.covered / (T.rowAxis.length * T.colAxis.length)) * 100) : 0;
+    statsEl.innerHTML = [
+      ["Cells changed", `${res.changed}`],
+      [fuel ? "Average change" : "Average pull", `${res.avg.toFixed(1)}<small>${u}</small>`],
+      fuel ? ["Largest increase", `+${res.maxUp.toFixed(1)}<small>${u}</small>`] : ["Largest pull", `${res.maxDn.toFixed(1)}<small>${u}</small>`],
+      fuel ? ["Largest decrease", `${res.maxDn.toFixed(1)}<small>${u}</small>`] : ["Samples used", `${res.used.toLocaleString()}`],
+      ["Table coverage", `${cov}<small>%</small>`],
+    ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+  } else statsEl.innerHTML = "";
+
+  const notes = [];
+  if (message) notes.push({ warn: true, t: message });
+  if (res && res.notes) notes.push(...res.notes);
+  if (res && !res.original && res.used !== undefined && state.src === "log") notes.push({ t: `${res.used.toLocaleString()} of ${res.total.toLocaleString()} samples were used.` });
+  if (state.example) notes.unshift({ t: "These results come from built-in example data, not your car." });
+  $("#notes").innerHTML = notes.map((n) => `<li class="${n.warn ? "warn" : ""}">${esc(n.t)}</li>`).join("") || '<li>Nothing to report.</li>';
+
+  const avail = res && !res.original ? ["new", "change", "orig", "hits", "err"] : ["orig"];
+  if (!avail.includes(state.view)) state.view = avail[0];
+  $("#views").innerHTML = avail.map((v) => `<button type="button" data-view="${v}" aria-pressed="${v === state.view}">${v === "err" && !fuel ? "Max knock" : VIEWS[v]}</button>`).join("");
+  $("#views").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { state.view = b.dataset.view; renderResult(res, message); }));
+  ["#copyNew", "#copyAxes", "#copyChange"].forEach((id) => { $(id).disabled = !(res && !res.original); });
+  renderGrid(T, res && !res.original ? res : null);
+}
+
+function renderGrid(T, res) {
+  const wrap = $("#gridWrap");
+  const legend = $("#legend");
+  if (!T) { wrap.innerHTML = '<p class="hint" style="padding:14px">Your table will appear here.</p>'; legend.innerHTML = ""; return; }
+  const view = res ? state.view : "orig";
+  const nr = T.rowAxis.length, nc = T.colAxis.length;
+  const fuel = isFuel();
+  const d = T.decimals;
+  let grid, fmt, bg;
+  const seq = (t) => `color-mix(in oklab, var(--seq-hi) ${Math.round(clamp(t, 0, 1) * 100)}%, var(--seq-lo))`;
+  const div = (v, maxAbs) => {
+    if (!Number.isFinite(v) || v === 0) return "transparent";
+    const p = Math.round(clamp(Math.abs(v) / maxAbs, 0, 1) * 62) + 8;
+    return `color-mix(in oklab, ${v > 0 ? "var(--add)" : "var(--cut)"} ${p}%, var(--surface))`;
+  };
+  if (view === "new" || view === "orig") {
+    grid = view === "new" ? res.out : T.values;
+    const flat = grid.flat().filter(Number.isFinite);
+    const mn = Math.min(...flat), mx = Math.max(...flat);
+    fmt = (v) => (Number.isFinite(v) ? v.toFixed(d) : "");
+    bg = (v) => (Number.isFinite(v) ? seq(mx > mn ? (v - mn) / (mx - mn) : 0) : "transparent");
+    legend.innerHTML = `<span><i class="sw" style="background:var(--seq-lo)"></i>low</span><span><i class="sw" style="background:var(--seq-hi)"></i>high</span>${view === "new" ? `<span><i class="sw" style="box-shadow:inset 0 0 0 2px var(--add)"></i>${fuel ? "raised" : ""}</span><span><i class="sw" style="box-shadow:inset 0 0 0 2px var(--cut)"></i>${fuel ? "lowered" : "timing pulled"}</span>` : ""}`;
+  } else if (view === "change") {
+    grid = res.change;
+    const maxAbs = Math.max(fuel ? 5 : 2, ...grid.flat().filter(Number.isFinite).map(Math.abs));
+    fmt = (v) => (Number.isFinite(v) ? (v > 0 ? "+" : "") + v.toFixed(1) : "");
+    bg = (v) => div(v, maxAbs);
+    legend.innerHTML = fuel ? `<span><i class="sw" style="background:var(--add)"></i>more fuel / airflow (%)</span><span><i class="sw" style="background:var(--cut)"></i>less (%)</span>` : `<span><i class="sw" style="background:var(--cut)"></i>timing removed (°)</span>`;
+  } else if (view === "hits") {
+    grid = res.W;
+    const mx = Math.max(1, ...grid.flat());
+    fmt = (v) => (v >= 0.5 ? Math.round(v).toLocaleString() : "");
+    bg = (v) => (v >= 0.5 ? `color-mix(in oklab, var(--accent) ${Math.round(8 + 50 * Math.log1p(v) / Math.log1p(mx))}%, var(--surface))` : "transparent");
+    legend.innerHTML = `<span>Weighted samples per cell. Cells under ${readSettings().minHits} are left alone.</span>`;
+  } else {
+    grid = res.err;
+    const maxAbs = Math.max(fuel ? 5 : 2, ...grid.flat().filter(Number.isFinite).map(Math.abs));
+    fmt = (v) => (Number.isFinite(v) ? (fuel && v > 0 ? "+" : "") + v.toFixed(1) : "");
+    bg = (v) => (fuel ? div(v, maxAbs) : div(-v, maxAbs));
+    legend.innerHTML = fuel ? `<span>Average fuel error before smoothing and limits. Positive means the engine ran lean.</span>` : `<span>Most knock retard seen in each cell (°).</span>`;
+  }
+  const corner = T.oneD ? (state.type === "maf" ? "Hz" : "") : "RPM \\ load";
+  let html = `<table class="map"><thead><tr><th class="corner" scope="col">${corner}</th>`;
+  if (T.oneD) html += `<th scope="col">${state.type === "maf" ? "g/s" : "value"}</th>`;
+  else for (const c of T.colAxis) html += `<th scope="col">${c}</th>`;
+  html += "</tr></thead><tbody>";
+  for (let r = 0; r < nr; r++) {
+    html += `<tr><th scope="row">${T.rowAxis[r]}</th>`;
+    for (let c = 0; c < nc; c++) {
+      const v = grid[r][c];
+      let cls = "", style = `background:${bg(v)}`;
+      if (view === "new" && res && Number.isFinite(res.change[r][c]) && res.change[r][c] !== 0) {
+        cls = "chg"; style += `;--hl:${res.change[r][c] > 0 ? "var(--add)" : "var(--cut)"}`;
+      }
+      if (!Number.isFinite(v) || (view === "hits" && v < 0.5)) cls += " nodata";
+      const tip = res ? `${T.rowAxis[r]}${T.oneD ? "" : " × " + T.colAxis[c]}: ${Math.round(res.W[r][c])} samples` : "";
+      html += `<td class="${cls}" style="${style}" title="${tip}">${fmt(v)}</td>`;
+    }
+    html += "</tr>";
+  }
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+
+function tableToText(T, grid, withAxes, fmt) {
+  const nl = "\r\n";
+  if (T.oneD) return T.rowAxis.map((a, i) => (withAxes ? a + "\t" : "") + fmt(grid[i][0])).join(nl);
+  const rows = grid.map((row, i) => (withAxes ? T.rowAxis[i] + "\t" : "") + row.map(fmt).join("\t"));
+  if (withAxes) rows.unshift(["", ...T.colAxis].join("\t"));
+  return rows.join(nl);
+}
+async function copyText(text, label) {
+  const fb = $("#copyFallback");
+  try {
+    await navigator.clipboard.writeText(text);
+    fb.hidden = true;
+    $("#copiedMsg").textContent = `${label} copied`;
+  } catch (e) {
+    fb.hidden = false; fb.value = text; fb.focus(); fb.select();
+    $("#copiedMsg").textContent = "Copying is blocked here. The text below is selected: press Ctrl+C.";
+  }
+  clearTimeout(copyText.t);
+  copyText.t = setTimeout(() => { $("#copiedMsg").textContent = ""; }, 4000);
+}
+
+function readFileText(file) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsText(file); }); }
+async function loadFiles(files) {
+  if (!files || !files.length) return;
+  leaveExample(false);
+  const texts = await Promise.all([...files].map(readFileText));
+  setLog(texts.map(parseLog), files.length === 1 ? files[0].name : `${files.length} files`);
+}
+
+function loadExample() {
+  state.example = true;
+  $("#exampleBanner").hidden = false;
+  const ex = genExample(state.type);
+  $("#tableText").value = ex.tableText;
+  parseTableInput();
+  setLog([parseLog(ex.logText)], "Example log");
+}
+function leaveExample(clearTable) {
+  if (!state.example) return;
+  state.example = false;
+  $("#exampleBanner").hidden = true;
+  if (clearTable) { $("#tableText").value = ""; state.table = null; parseTableInput(); }
+  state.log = null; state.logs = [];
+  $("#logStatus").textContent = "";
+  renderChannels();
+}
+
+function init() {
+  fillSelect($("#goal"), Object.entries(GOALS).map(([k, g]) => [k, g.label]), "street");
+  fillSelect($("#fuel"), Object.entries(FUELS).map(([k, f]) => [k, `${f.label} (${f.st})`]), "gas");
+  document.querySelectorAll('input[name="ttype"]').forEach((r) => r.addEventListener("change", () => {
+    state.type = r.value;
+    applyVisibility();
+    if (state.example) { loadExample(); return; }
+    parseTableInput(); remap(); renderChannels(); run();
+  }));
+  document.querySelectorAll('input[name="src"]').forEach((r) => r.addEventListener("change", () => { state.src = r.value; applyVisibility(); run(); }));
+  $("#tableText").addEventListener("input", () => {
+    if (state.example) { state.example = false; $("#exampleBanner").hidden = true; }
+    parseTableInput(); remap(); renderChannels(); run();
+  });
+  $("#logText").addEventListener("input", () => {
+    const v = $("#logText").value;
+    if (!v.trim()) return;
+    leaveExample(false);
+    setLog([parseLog(v)], "Pasted log");
+  });
+  $("#logFile").addEventListener("change", (e) => loadFiles(e.target.files));
+  const drop = $("#drop");
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); loadFiles(e.dataTransfer.files); });
+  $("#clearExample").addEventListener("click", () => { leaveExample(true); run(); $("#tableText").focus(); });
+  ["goal", "fuel", "corrSource", "target", "useTrims", "strength", "maxChange", "deadband", "smooth", "krThresh", "krMargin", "maxPull", "neighbors", "minHits", "wbDelay", "minEct", "tpsRate", "histText", "hitsText", "histSign"]
+    .forEach((id) => $("#" + id).addEventListener(id.endsWith("Text") ? "input" : "change", () => {
+      if (id === "minEct") state.ectTouched = true;
+      if (id === "goal") $("#krMargin").value = GOALS[$("#goal").value].krMargin;
+      run();
+    }));
+  $("#copyNew").addEventListener("click", () => {
+    const r = state.result, T = state.table; if (!r) return;
+    copyText(tableToText(T, r.out, false, (v) => (Number.isFinite(v) ? v.toFixed(T.decimals) : "")), "New table");
+  });
+  $("#copyAxes").addEventListener("click", () => {
+    const r = state.result, T = state.table; if (!r) return;
+    copyText(tableToText(T, r.out, true, (v) => (Number.isFinite(v) ? v.toFixed(T.decimals) : "")), "Table with axes");
+  });
+  $("#copyChange").addEventListener("click", () => {
+    const r = state.result, T = state.table; if (!r) return;
+    copyText(tableToText(T, r.change, false, (v) => (Number.isFinite(v) ? v.toFixed(2) : "0")), "Change table");
+  });
+  applyVisibility();
+  loadExample();
+}
+init();
+</script>
