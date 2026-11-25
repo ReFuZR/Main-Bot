@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Bo2Tool</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Shared with the Python version -->
+    <None Include="..\..\commands.json" Link="commands.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

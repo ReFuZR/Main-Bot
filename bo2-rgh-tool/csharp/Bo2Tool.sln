@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bo2Tool.Core", "Bo2Tool.Core\Bo2Tool.Core.csproj", "{821726A7-46D5-4D15-A594-C679CB74F1E4}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bo2Tool.App", "Bo2Tool.App\Bo2Tool.App.csproj", "{5B3E2C41-8F0A-4C6D-9E1B-7A2D4F6C8B90}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bo2Tool.Tests", "Bo2Tool.Tests\Bo2Tool.Tests.csproj", "{11E95ED6-C621-452D-9D3C-5C106EDC43B7}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{821726A7-46D5-4D15-A594-C679CB74F1E4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{821726A7-46D5-4D15-A594-C679CB74F1E4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{821726A7-46D5-4D15-A594-C679CB74F1E4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{821726A7-46D5-4D15-A594-C679CB74F1E4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{11E95ED6-C621-452D-9D3C-5C106EDC43B7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{11E95ED6-C621-452D-9D3C-5C106EDC43B7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{11E95ED6-C621-452D-9D3C-5C106EDC43B7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{11E95ED6-C621-452D-9D3C-5C106EDC43B7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5B3E2C41-8F0A-4C6D-9E1B-7A2D4F6C8B90}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5B3E2C41-8F0A-4C6D-9E1B-7A2D4F6C8B90}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5B3E2C41-8F0A-4C6D-9E1B-7A2D4F6C8B90}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5B3E2C41-8F0A-4C6D-9E1B-7A2D4F6C8B90}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
