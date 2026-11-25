@@ -20,7 +20,7 @@ It needs Python 3.10+ and nothing else.
 
 ## Supported games
 
-`--game` picks a profile from `offsets/`. The default is `bo2`.
+`--game` picks the game. The default is `bo2`.
 
 | `--game` | Game | Title ID |
 |---|---|---|
@@ -33,8 +33,9 @@ It needs Python 3.10+ and nothing else.
 | `waw` | World at War | 4156081C |
 | `aw` | Advanced Warfare | 41560914 |
 
-Each profile has the same fields and ships with **no addresses**. They differ
-per title update, so you find them on your console (see `wizard`).
+Every game has the same fields and ships with **no addresses**. They differ
+per title update, so you find them on your console (see `wizard`). What you
+find is saved to `offsets/<game>.json` (`--offsets` picks another file).
 
 ## Console setup
 
@@ -68,7 +69,7 @@ python -m bo2tool 192.168.1.50 -c "preset fov" # one-shot commands
 | `peek <addr> [len]` / `poke <addr> <type> <value>` | Raw memory |
 | `raw <xbdm cmd>` / `reboot [cold]` | Anything else |
 
-Fields in every profile: `name`, `clan_tag`, `prestige`, `rank_xp`, `fov`,
+Fields in every game: `name`, `clan_tag`, `prestige`, `rank_xp`, `fov`,
 `kills`, `deaths`, `wins`, `losses`, `score`, `headshots`, `time_played`,
 `match_kills`, `match_score`.
 
@@ -80,7 +81,7 @@ Fields in every profile: `name`, `clan_tag`, `prestige`, `rank_xp`, `fov`,
 | `cmd <command>` | Run any console command, e.g. `cmd cg_fov 90`. Join several with `;` |
 | `commands [search]` | Browse the catalog: `commands fov`, `commands world` |
 | `presets` / `preset <name>` | Groups of commands: `fov`, `thirdperson`, `cinematic`, `noir`, `moon`, `slowmo`, `sandbox`, `reset`, ... |
-| `funcs` / `setfunc <name> <addr>` | Function addresses |
+| `funcs` / `setfunc Cbuf_AddText <addr>` | Show / save the function address |
 
 How it works: the game has a function, `Cbuf_AddText`, that queues console
 commands. JRPC2 lets the PC call it. Its address differs per title update:
@@ -122,7 +123,7 @@ wizard: 14 field(s) to find: name, clan_tag, prestige, ...
 
 It asks for the value you see in game and scans for it. Then you change the
 value in game (play a bit, prestige, rename) and type the new one, until only
-one match is left. That address is saved to the profile. With 8 or fewer
+one match is left. That address is saved to `offsets/<game>.json`. With 8 or fewer
 matches it shows previews, and you can `pick N`. `skip` moves on, `quit`
 stops, and `wizard kills wins` redoes just those fields.
 

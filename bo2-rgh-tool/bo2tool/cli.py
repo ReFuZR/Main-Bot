@@ -1,25 +1,19 @@
-"""Interactive shell for poking at BO2 (and other 360 CoD games) on an RGH console."""
+"""Interactive shell for BO2 and the other Xbox 360 CoD games on an RGH console."""
 
 from __future__ import annotations
 
 import argparse
 import cmd
 import shlex
-import struct
 import sys
 import time
 from pathlib import Path
 
-from . import jrpc
-from .catalog import Catalog
-from .game import Offsets, available_games, offsets_path, read_field, strip_colors, write_field
-from .xbdm import XBDM_PORT, Xbdm, XbdmError
+from .data import CBUF, FIELDS, GAMES, Catalog, Profile, strip_colors
+from .xbdm import Xbdm, XbdmError, encode
 
-CBUF = "Cbuf_AddText"
-DEFAULT_SCAN = (0x82000000, 0x86000000)
-WIZARD_KINDS = {"string": "str", "i32": "i32", "u32": "u32", "float": "float", "bytes": "hex"}
-WIZARD_PICK_LIMIT = 8
-
+SCAN = (0x82000000, 0x86000000)
+FIND_KIND = {"string": "str", "bytes": "hex"}  # field type -> find type, where they differ
 BANNER = r"""
   ___  ___ ___   ___  ___ _  _   _____         _
  | _ )/ _ \_  ) | _ \/ __| || | |_   _|__  ___| |
@@ -30,65 +24,39 @@ Type 'help' for commands.
 """
 
 
+def printable(data: bytes) -> str:
+    return "".join(chr(b) if 32 <= b < 127 else "." for b in data)
+
+
 def hexdump(addr: int, data: bytes) -> str:
-    lines = []
-    for i in range(0, len(data), 16):
-        row = data[i : i + 16]
-        hx = " ".join(f"{b:02X}" for b in row)
-        asc = "".join(chr(b) if 32 <= b < 127 else "." for b in row)
-        lines.append(f"{addr + i:08X}  {hx:<47}  {asc}")
-    return "\n".join(lines)
+    return "\n".join(f"{addr + i:08X}  {data[i:i + 16].hex(' ').upper():<47}  {printable(data[i:i + 16])}"
+                     for i in range(0, len(data), 16))
 
 
-def encode_value(kind: str, value: str) -> bytes:
-    if kind == "hex":
-        return bytes.fromhex(value)
-    if kind == "u32":
-        return struct.pack(">I", int(value, 0) & 0xFFFFFFFF)
-    if kind == "i32":
-        return struct.pack(">i", int(value, 0))
-    if kind == "float":
-        return struct.pack(">f", float(value))
-    if kind == "str":
-        return value.encode("latin-1")
-    raise ValueError(f"unknown type {kind!r} (hex/u32/i32/float/str)")
-
-
-def _make_progress():
+def progress():
     last = [-1]
 
-    def progress(done: int, total: int) -> None:
-        if not sys.stdout.isatty():
-            return
+    def show(done: int, total: int) -> None:
         pct = done * 100 // total
-        if pct != last[0]:
+        if sys.stdout.isatty() and pct != last[0]:
             last[0] = pct
-            sys.stdout.write(f"\r  scanning... {pct:3d}%")
-            sys.stdout.flush()
-        if done >= total:
-            sys.stdout.write("\n")
+            print(f"\r  scanning... {pct:3d}%", end="\n" if done >= total else "", flush=True)
 
-    return progress
+    return show
 
 
 class Shell(cmd.Cmd):
-    def __init__(self, xb: Xbdm, offsets: Offsets, catalog: Catalog | None = None):
+    def __init__(self, xb: Xbdm, profile: Profile, catalog: Catalog | None = None):
         super().__init__()
-        self.xb = xb
-        self.offsets = offsets
-        self.catalog = catalog or Catalog()
-        self.prompt = f"{offsets.short}> "
-        self.warned_host = False
-        self.last_hits: list[int] = []
-        self.last_kind = ""
+        self.xb, self.p, self.cat = xb, profile, catalog or Catalog()
+        self.prompt, self.hits, self.kind, self.warned = f"{profile.short}> ", [], "", False
         self.ask = input  # swapped out in tests
 
-    # -- plumbing -------------------------------------------------------------
     def onecmd(self, line):
         try:
             return super().onecmd(line)
         except (XbdmError, ValueError, KeyError, LookupError, OSError) as e:
-            print(f"error: {e}")
+            print(f"error: {e.args[0] if isinstance(e, KeyError) else e}")
         except KeyboardInterrupt:
             print("\ninterrupted")
 
@@ -98,15 +66,25 @@ class Shell(cmd.Cmd):
     def default(self, line):
         print(f"unknown command: {line.split()[0]} (try 'help')")
 
-    # -- console --------------------------------------------------------------
+    def _ask(self, prompt: str) -> str:
+        try:
+            return self.ask(prompt).strip()
+        except EOFError:
+            return "quit"
+
+    def _field(self, name: str) -> tuple[int, str, int]:
+        if name not in FIELDS:
+            raise KeyError(f"unknown field '{name}' (known: {', '.join(FIELDS)})")
+        return self.p.addr(name), FIELDS[name][0], FIELDS[name][1]
+
+    # -- console ----------------------------------------------------------------
     def do_info(self, _):
-        """info - console name and the running game"""
-        xex = self.xb.running_xex()
-        print(f"console : {self.xb.console_name()}")
-        print(f"running : {xex}")
-        print(f"profile : {self.offsets.game} ({self.offsets.title_update}) - {self.offsets.path.name}")
-        if self.offsets.xex.lower() not in xex.lower():
-            print(f"warning : doesn't look like multiplayer ({self.offsets.xex}); wrong game or mode?")
+        """info - console name, running game and loaded profile"""
+        xex = self.xb.xex()
+        print(f"console : {self.xb.name()}\nrunning : {xex}\n"
+              f"profile : {self.p.info['game']} ({self.p.info['tu']}) - {self.p.path.name}")
+        if "default_mp.xex" not in xex.lower():
+            print("warning : doesn't look like multiplayer (default_mp.xex); wrong game or mode?")
 
     def do_reboot(self, arg):
         """reboot [cold] - reboot the console"""
@@ -117,130 +95,21 @@ class Shell(cmd.Cmd):
     def do_raw(self, arg):
         """raw <xbdm command> - send any XBDM command, e.g. 'raw systime'"""
         code, msg = self.xb.send(arg)
-        print(f"{code}- {msg}")
-        if code in (202, 211):
-            for line in self.xb._read_multiline():
-                print(f"  {line}")
+        print(f"{code}- {msg}", *(f"  {l}" for l in (self.xb.lines() if code in (202, 211) else [])), sep="\n")
 
-    # -- game console commands (needs JRPC2) ----------------------------------
-    def do_cmd(self, arg):
-        """cmd <console command> - run a built-in game command, e.g. 'cmd cg_fov 90'
-
-        Needs the JRPC2 plugin on the console and the Cbuf_AddText address
-        (see 'setup'). Several commands can be joined with ';'."""
-        text = arg.strip()
-        if not text:
-            raise ValueError("usage: cmd <console command>")
-        self._run_commands([c.strip() for c in text.split(";") if c.strip()])
-
-    def _run_commands(self, commands: list[str]) -> None:
-        fn = self.offsets.func(CBUF)
-        game = self.offsets.short
-        for c in commands:
-            entry = self.catalog.lookup(c.split()[0])
-            if entry is None:
-                print(f"  note: '{c.split()[0]}' isn't in the catalog; sending anyway")
-            elif game not in entry.games:
-                print(f"  note: '{entry.name}' isn't listed for {game}; sending anyway")
-            elif entry.scope == "host" and not self.warned_host:
-                print("  note: host settings affect everyone in your lobby - use a private match")
-                self.warned_host = True
-            jrpc.call(self.xb, fn.addr, 0, c + "\n")
-            print(f"  > {c}")
-
-    def do_commands(self, arg):
-        """commands [search] - list built-in commands for this game, e.g. 'commands fov'
-
-        Search matches names, descriptions or a category (view, hud, player,
-        world, match, misc). H = affects the lobby when you host, C = needs sv_cheats 1."""
-        entries = sorted(self.catalog.search(self.offsets.short, arg.strip()),
-                         key=lambda e: (e.category, e.name))
-        if not entries:
-            print("no matching commands")
-            return
-        width = max(len(e.name) for e in entries)
-        category = None
-        for e in entries:
-            if e.category != category:
-                category = e.category
-                print(f"[{category}]")
-            flags = ("H" if e.scope == "host" else " ") + ("C" if e.cheat else " ")
-            default = f" (default {e.default})" if e.default is not None else ""
-            print(f"  {e.name:<{width}} {flags} {e.desc}{default}")
-        print(f"{len(entries)} command(s). Example: cmd {entries[0].example or entries[0].name}")
-
-    def do_presets(self, _):
-        """presets - list command presets"""
-        for p in self.catalog.presets.values():
-            print(f"  {p.name:<12} {p.desc}")
-            print(f"  {'':<12} {'; '.join(p.commands)}")
-
-    def do_preset(self, arg):
-        """preset <name> - run a group of commands, e.g. 'preset thirdperson'"""
-        run, skipped = self.catalog.preset_commands(arg.strip(), self.offsets.short)
-        if skipped:
-            print(f"  skipping (not in {self.offsets.short}): {', '.join(skipped)}")
-        self._run_commands(run)
-
-    def do_funcs(self, _):
-        """funcs - list game functions the tool can call and their addresses"""
-        for fn in self.offsets.functions.values():
-            where = f"0x{fn.addr:08X}" if fn.addr is not None else "(not set)"
-            hint = ("  suggested " + ", ".join(f"0x{a:08X}" for a in fn.suggested)
-                    if fn.suggested and fn.addr is None else "")
-            print(f"  {fn.name:<14} {where:<12}{hint}  {fn.desc}")
-
-    def do_setfunc(self, arg):
-        """setfunc <function> <addr> [--force] - save a function address after a sanity check"""
-        parts = arg.split()
-        if len(parts) < 2:
-            raise ValueError("usage: setfunc <function> <addr> [--force]")
-        name, addr = parts[0], int(parts[1], 0)
-        if name not in self.offsets.functions:
-            raise KeyError(f"unknown function '{name}'")
-        if not jrpc.looks_like_function(self.xb, addr) and "--force" not in parts:
-            raise ValueError(f"0x{addr:08X} doesn't start like a function; "
-                             "double-check it or add --force")
-        self.offsets.set_func_addr(name, addr)
-        print(f"saved {name} = 0x{addr:08X}")
-
-    def do_setup(self, _):
-        """setup - check function addresses and offer the suggested ones"""
-        for fn in self.offsets.functions.values():
-            if fn.addr is not None:
-                ok = jrpc.looks_like_function(self.xb, fn.addr)
-                print(f"  {fn.name}: 0x{fn.addr:08X} {'looks good' if ok else 'does NOT look like a function'}")
-                continue
-            if not fn.suggested:
-                print(f"  {fn.name}: no address and no suggestion for {self.offsets.short}; "
-                      f"find it yourself and use 'setfunc {fn.name} <addr>'")
-                continue
-            for addr in fn.suggested:
-                if not jrpc.looks_like_function(self.xb, addr):
-                    print(f"  {fn.name}: suggested 0x{addr:08X} doesn't look like a function "
-                          "on your console (different title update?)")
-                    continue
-                print(f"  {fn.name}: suggested 0x{addr:08X} looks like a function start.")
-                print("  It's community-reported and unverified; a wrong address can crash the game.")
-                print("  Test it with something harmless right after: cmd cg_drawFPS 1")
-                if self._ask("  save it? [y/N] ").lower() in ("y", "yes"):
-                    self.offsets.set_func_addr(fn.name, addr)
-                    print("  saved.")
-                    break
-
-    # -- named fields ---------------------------------------------------------
+    # -- your player's values ---------------------------------------------------
     def do_fields(self, _):
-        """fields - list fields from offsets.json"""
-        for f in self.offsets.fields.values():
-            where = f"0x{f.addr:08X}" if f.addr is not None else "(not found)"
-            print(f"  {f.name:<10} {f.type:<6} {where:<12} {f.desc}")
+        """fields - list the fields and their addresses"""
+        for name, (kind, _, desc) in FIELDS.items():
+            where = f"0x{self.p.addrs[name]:08X}" if name in self.p.addrs else "(not found)"
+            print(f"  {name:<12} {kind:<6} {where:<12} {desc.format(**self.p.info)}")
 
     def do_get(self, arg):
         """get <field> - read a field, e.g. 'get name'"""
-        field = self.offsets.get(arg.strip())
-        value = read_field(self.xb, field)
-        print(f"{field.name} = {value!r}")
-        if field.type == "string" and "^" in value:
+        name = arg.strip()
+        value = self.xb.get(*self._field(name))
+        print(f"{name} = {value!r}")
+        if isinstance(value, str) and "^" in value:
             print(f"  (plain: {strip_colors(value)!r})")
 
     def do_set(self, arg):
@@ -248,63 +117,41 @@ class Shell(cmd.Cmd):
         name, _, value = arg.strip().partition(" ")
         if not value:
             raise ValueError("usage: set <field> <value>")
-        field = self.offsets.get(name)
-        write_field(self.xb, field, value)
-        print(f"{name} -> {read_field(self.xb, field)!r}")
+        addr, kind, size = self._field(name)
+        self.xb.put(addr, kind, value, size)
+        print(f"{name} -> {self.xb.get(addr, kind, size)!r}")
 
     def do_freeze(self, arg):
         """freeze <field> <value> [seconds] - keep re-writing a value until Ctrl+C"""
         parts = shlex.split(arg)
         if len(parts) < 2:
             raise ValueError("usage: freeze <field> <value> [seconds]")
-        field = self.offsets.get(parts[0])
+        addr, kind, size = self._field(parts[0])
         interval = float(parts[2]) if len(parts) > 2 else 0.5
-        print(f"freezing {field.name} = {parts[1]} every {interval}s (Ctrl+C to stop)")
+        print(f"freezing {parts[0]} = {parts[1]} every {interval}s (Ctrl+C to stop)")
         try:
             while True:
-                write_field(self.xb, field, parts[1])
+                self.xb.put(addr, kind, parts[1], size)
                 time.sleep(interval)
         except KeyboardInterrupt:
             print("\nstopped")
 
     def do_setaddr(self, arg):
-        """setaddr <field> <addr> - save an address into offsets.json"""
+        """setaddr <field> <addr> - save a field address by hand"""
         name, addr = arg.split()
-        self.offsets.set_addr(name, int(addr, 0))
+        if name not in FIELDS:
+            raise KeyError(f"unknown field '{name}'")
+        self.p.save(name, int(addr, 0))
         print(f"saved {name} = 0x{int(addr, 0):08X}")
 
-    # -- finding addresses ----------------------------------------------------
-    def do_find(self, arg):
-        """find <type> <value> [start end] - scan memory for a value
-
-        type is hex/u32/i32/float/str. Example: 'find str MyGamertag'.
-        After that, change the value in game and use 'refine' to narrow it down."""
-        parts = shlex.split(arg)
-        if len(parts) < 2:
-            raise ValueError("usage: find <type> <value> [start end]")
-        kind, value = parts[0], parts[1]
-        start, end = DEFAULT_SCAN
-        if len(parts) >= 4:
-            start, end = int(parts[2], 0), int(parts[3], 0)
-        self.last_hits = self._scan(kind, value, start, end)
-        self.last_kind = kind
-        self._show_hits()
-
-    def do_refine(self, arg):
-        """refine <value> - keep only previous hits that now hold <value>"""
-        if not self.last_hits:
-            raise ValueError("nothing to refine; run 'find' first")
-        self.last_hits = self._refine(self.last_kind, arg.strip(), self.last_hits)
-        self._show_hits()
-
+    # -- finding addresses ------------------------------------------------------
     def _scan(self, kind: str, value: str, start: int, end: int) -> list[int]:
-        pattern = encode_value(kind, value)
+        pattern = encode(kind, value)
         print(f"searching 0x{start:08X}-0x{end:08X} for {pattern.hex().upper()}")
-        return self.xb.scan(start, end, pattern, progress=_make_progress())
+        return self.xb.scan(start, end, pattern, progress=progress())
 
     def _refine(self, kind: str, value: str, hits: list[int]) -> list[int]:
-        pattern = encode_value(kind, value)
-        kept = []
+        pattern, kept = encode(kind, value), []
         for addr in hits:
             try:
                 if self.xb.read(addr, len(pattern)) == pattern:
@@ -314,164 +161,236 @@ class Shell(cmd.Cmd):
         return kept
 
     def _show_hits(self):
-        print(f"{len(self.last_hits)} hit(s)")
-        for addr in self.last_hits[:20]:
-            print(f"  0x{addr:08X}")
-        if len(self.last_hits) > 20:
+        print(f"{len(self.hits)} hit(s)", *(f"  0x{a:08X}" for a in self.hits[:20]), sep="\n")
+        if len(self.hits) > 20:
             print("  ... use 'refine' to narrow down")
-        if len(self.last_hits) == 1:
-            print("one hit, save it with: setaddr <field> " f"0x{self.last_hits[0]:08X}")
+        if len(self.hits) == 1:
+            print(f"one hit, save it with: setaddr <field> 0x{self.hits[0]:08X}")
 
-    # -- guided finder --------------------------------------------------------
-    def do_wizard(self, arg):
-        """wizard [field ...] [--range start end] - guided search for field addresses
+    def do_find(self, arg):
+        """find <type> <value> [start end] - scan memory (type: hex/u32/i32/float/str)
 
-        Walks through every field that has no address yet (or the fields you
-        name), narrows the hits down with your help, and saves each address
-        to offsets.json. Type 'skip' at any prompt to move on, 'quit' to stop."""
+        Example: 'find str MyGamertag'. Then change the value in game and 'refine'."""
         parts = shlex.split(arg)
-        start, end = DEFAULT_SCAN
+        if len(parts) < 2:
+            raise ValueError("usage: find <type> <value> [start end]")
+        start, end = (int(parts[2], 0), int(parts[3], 0)) if len(parts) >= 4 else SCAN
+        self.kind, self.hits = parts[0], self._scan(parts[0], parts[1], start, end)
+        self._show_hits()
+
+    def do_refine(self, arg):
+        """refine <value> - keep only previous hits that now hold <value>"""
+        if not self.hits:
+            raise ValueError("nothing to refine; run 'find' first")
+        self.hits = self._refine(self.kind, arg.strip(), self.hits)
+        self._show_hits()
+
+    def do_wizard(self, arg):
+        """wizard [field ...] [--range start end] - guided search that finds and saves addresses
+
+        Does every field without an address (or the ones you name). Type 'skip'
+        to move to the next field, 'quit' to stop."""
+        parts, (start, end) = shlex.split(arg), SCAN
         if "--range" in parts:
             i = parts.index("--range")
             start, end = int(parts[i + 1], 0), int(parts[i + 2], 0)
-            del parts[i : i + 3]
-        if parts:
-            names = parts
-            for n in names:
-                if n not in self.offsets.fields:
-                    raise KeyError(f"unknown field '{n}'")
-        else:
-            names = [n for n, f in self.offsets.fields.items() if f.addr is None]
+            del parts[i:i + 3]
+        for name in parts:
+            if name not in FIELDS:
+                raise KeyError(f"unknown field '{name}'")
+        names = parts or [n for n in FIELDS if n not in self.p.addrs]
         if not names:
-            print("every field already has an address (name fields to redo them)")
-            return
-
-        print(f"wizard: {len(names)} field(s) to find: {', '.join(names)}")
-        print("type 'skip' to move to the next field, 'quit' to stop\n")
-        found, skipped = [], []
+            return print("every field already has an address (name fields to redo them)")
+        print(f"wizard: {len(names)} field(s) to find: {', '.join(names)}\n"
+              "type 'skip' to move to the next field, 'quit' to stop\n")
+        found = []
         for name in names:
             result = self._wizard_field(name, start, end)
             if result == "quit":
-                skipped.extend(n for n in names if n not in found and n not in skipped)
                 break
-            (found if result else skipped).append(name)
+            if result:
+                found.append(name)
+        missing = [n for n in names if n not in found]
         print(f"\nwizard done: found {len(found)}" + (f" ({', '.join(found)})" if found else ""))
-        if skipped:
-            print(f"not found: {', '.join(skipped)} (run 'wizard {' '.join(skipped)}' to retry)")
+        if missing:
+            print(f"not found: {', '.join(missing)} (run 'wizard {' '.join(missing)}' to retry)")
 
     def _wizard_field(self, name: str, start: int, end: int):
-        """Returns True if saved, False if skipped, 'quit' to stop the wizard."""
-        field = self.offsets.fields[name]
-        kind = WIZARD_KINDS[field.type]
-        print(f"== {name} ({field.type}) - {field.desc}")
-        value = self._ask(f"  current value of {name} in game: ")
-        if value in ("skip", "quit"):
-            print()
-            return "quit" if value == "quit" else False
-        hits = self._scan(kind, value, start, end)
-
+        """True if saved, False if skipped, 'quit' to stop the wizard."""
+        ftype, _, desc = FIELDS[name]
+        kind, hits = FIND_KIND.get(ftype, ftype), None
+        print(f"== {name} ({ftype}) - {desc.format(**self.p.info)}")
+        answer = self._ask(f"  current value of {name} in game: ")
         while True:
+            if answer in ("skip", "quit"):
+                print()
+                return answer == "quit" and "quit"
+            if hits and answer.startswith("pick "):
+                try:
+                    hits = [hits[int(answer.split()[1]) - 1]]
+                except (ValueError, IndexError):
+                    print("  invalid pick")
+            else:
+                hits = self._scan(kind, answer, start, end) if hits is None else self._refine(kind, answer, hits)
             if not hits:
                 print("  no matches. Check the value (and the scan range) and retry later.")
                 return False
             if len(hits) == 1:
-                self.offsets.set_addr(name, hits[0])
+                self.p.save(name, hits[0])
                 print(f"  found it: {name} = 0x{hits[0]:08X} (saved)\n")
                 return True
             print(f"  {len(hits)} matches")
-            if len(hits) <= WIZARD_PICK_LIMIT:
-                for i, addr in enumerate(hits, 1):
-                    print(f"   {i}) 0x{addr:08X}  {self._preview(addr)}")
+            if len(hits) <= 8:
+                for i, a in enumerate(hits, 1):
+                    print(f"   {i}) 0x{a:08X}  {self._preview(a)}")
                 print("  type 'pick N' to choose one of these, or keep narrowing:")
             answer = self._ask(f"  change {name} in game, then type the new value: ")
-            if answer in ("skip", "quit"):
-                print()
-                return "quit" if answer == "quit" else False
-            if answer.startswith("pick "):
-                try:
-                    choice = hits[int(answer.split()[1]) - 1]
-                except (ValueError, IndexError):
-                    print("  invalid pick")
-                    continue
-                hits = [choice]
-                continue
-            hits = self._refine(kind, answer, hits)
 
     def _preview(self, addr: int) -> str:
         try:
             raw = self.xb.read(addr, 16)
         except XbdmError:
             return "(unreadable)"
-        asc = "".join(chr(b) if 32 <= b < 127 else "." for b in raw)
-        return f"{raw.hex(' ').upper()}  {asc}"
+        return f"{raw.hex(' ').upper()}  {printable(raw)}"
 
-    def _ask(self, prompt: str) -> str:
-        try:
-            return self.ask(prompt).strip()
-        except EOFError:
-            return "quit"
-
-    # -- raw memory -----------------------------------------------------------
+    # -- raw memory -------------------------------------------------------------
     def do_peek(self, arg):
         """peek <addr> [length] - hexdump memory (default 64 bytes)"""
         parts = arg.split()
         addr = int(parts[0], 0)
-        length = int(parts[1], 0) if len(parts) > 1 else 64
-        print(hexdump(addr, self.xb.read(addr, length)))
+        print(hexdump(addr, self.xb.read(addr, int(parts[1], 0) if len(parts) > 1 else 64)))
 
     def do_poke(self, arg):
-        """poke <addr> <type> <value> - write memory, type is hex/u32/i32/float/str"""
+        """poke <addr> <type> <value> - write memory (type: hex/u32/i32/float/str)"""
         parts = shlex.split(arg)
         if len(parts) != 3:
             raise ValueError("usage: poke <addr> <type> <value>")
-        addr = int(parts[0], 0)
-        self.xb.write(addr, encode_value(parts[1], parts[2]))
+        self.xb.write(int(parts[0], 0), encode(parts[1], parts[2]))
         print("ok")
+
+    # -- game console commands (JRPC2) ------------------------------------------
+    def do_cmd(self, arg):
+        """cmd <console command> - run a built-in game command, e.g. 'cmd cg_fov 90'
+
+        Needs the JRPC2 plugin and the Cbuf_AddText address (see 'setup').
+        Join several commands with ';'."""
+        commands = [c.strip() for c in arg.split(";") if c.strip()]
+        if not commands:
+            raise ValueError("usage: cmd <console command>")
+        self._run(commands)
+
+    def _run(self, commands: list[str]) -> None:
+        addr = self.p.addr(CBUF)
+        for c in commands:
+            e = self.cat.lookup(c.split()[0])
+            if e is None:
+                print(f"  note: '{c.split()[0]}' isn't in the catalog; sending anyway")
+            elif self.p.short not in e["games"]:
+                print(f"  note: '{e['name']}' isn't listed for {self.p.short}; sending anyway")
+            elif "H" in e["flags"] and not self.warned:
+                print("  note: host settings affect everyone in your lobby - use a private match")
+                self.warned = True
+            self.xb.call(addr, 0, c + "\n")
+            print(f"  > {c}")
+
+    def do_commands(self, arg):
+        """commands [search] - list built-in commands for this game, e.g. 'commands fov'
+
+        Searches names and descriptions, or a category (view, hud, player, world,
+        match, misc). H = affects the lobby when you host, C = needs sv_cheats 1."""
+        entries = sorted(self.cat.search(self.p.short, arg.strip()), key=lambda e: (e["cat"], e["name"]))
+        if not entries:
+            return print("no matching commands")
+        width, cat = max(len(e["name"]) for e in entries), None
+        for e in entries:
+            if e["cat"] != cat:
+                cat = e["cat"]
+                print(f"[{cat}]")
+            default = f" (default {e['default']})" if "default" in e else ""
+            print(f"  {e['name']:<{width}} {e['flags']:<2} {e['desc']}{default}")
+        print(f"{len(entries)} command(s). Example: cmd {entries[0].get('example', entries[0]['name'])}")
+
+    def do_presets(self, _):
+        """presets - list command presets"""
+        for name, p in self.cat.presets.items():
+            print(f"  {name:<12} {p['desc']}\n  {'':<12} {'; '.join(p['commands'])}")
+
+    def do_preset(self, arg):
+        """preset <name> - run a group of commands, e.g. 'preset thirdperson'"""
+        run, skipped = self.cat.preset(arg.strip(), self.p.short)
+        if skipped:
+            print(f"  skipping (not in {self.p.short}): {', '.join(skipped)}")
+        self._run(run)
+
+    def do_funcs(self, _):
+        """funcs - show the Cbuf_AddText address"""
+        sugg = ", ".join(self.p.info.get("cbuf", []))
+        where = f"0x{self.p.addrs[CBUF]:08X}" if CBUF in self.p.addrs else "(not set)" + (f"  suggested {sugg}" if sugg else "")
+        print(f"  {CBUF}  {where}  - runs console commands")
+
+    def do_setfunc(self, arg):
+        """setfunc Cbuf_AddText <addr> [--force] - save the function address after a sanity check"""
+        parts = arg.split()
+        if len(parts) < 2 or parts[0] != CBUF:
+            raise ValueError(f"usage: setfunc {CBUF} <addr> [--force]")
+        addr = int(parts[1], 0)
+        if "--force" not in parts and not self.xb.is_function(addr):
+            raise ValueError(f"0x{addr:08X} doesn't start like a function; double-check it or add --force")
+        self.p.save(CBUF, addr)
+        print(f"saved {CBUF} = 0x{addr:08X}")
+
+    def do_setup(self, _):
+        """setup - check the Cbuf_AddText address, or try the suggested ones"""
+        if CBUF in self.p.addrs:
+            ok = self.xb.is_function(self.p.addrs[CBUF])
+            return print(f"  {CBUF}: 0x{self.p.addrs[CBUF]:08X} {'looks good' if ok else 'does NOT look like a function'}")
+        suggestions = [int(a, 16) for a in self.p.info.get("cbuf", [])]
+        if not suggestions:
+            print(f"  no suggested {CBUF} address for {self.p.short}; find it yourself and use 'setfunc {CBUF} <addr>'")
+        for addr in suggestions:
+            if not self.xb.is_function(addr):
+                print(f"  suggested 0x{addr:08X} doesn't look like a function on your console (different title update?)")
+                continue
+            print(f"  suggested 0x{addr:08X} looks like a function start.\n"
+                  "  It's community-reported and unverified; a wrong address can crash the game.\n"
+                  "  Test it with something harmless right after: cmd cg_drawFPS 1")
+            if self._ask("  save it? [y/N] ").lower() in ("y", "yes"):
+                self.p.save(CBUF, addr)
+                return print("  saved.")
 
     def do_quit(self, _):
         """quit - disconnect"""
         return True
 
-    do_exit = do_quit
-    do_EOF = do_quit
+    do_exit = do_EOF = do_quit
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="bo2tool", description="BO2 / 360 CoD RGH tool over XBDM")
     ap.add_argument("host", nargs="?", help="console IP address")
-    ap.add_argument("--port", type=int, default=XBDM_PORT)
-    ap.add_argument("--game", default="bo2", help="game profile from offsets/ (default bo2)")
-    ap.add_argument("--offsets", type=Path, help="use this offsets file instead of --game")
+    ap.add_argument("--port", type=int, default=730)
+    ap.add_argument("--game", default="bo2", choices=GAMES, help="game profile (default bo2)")
+    ap.add_argument("--offsets", type=Path, help="addresses file (default offsets/<game>.json)")
     ap.add_argument("--list-games", action="store_true", help="list game profiles and exit")
-    ap.add_argument("-c", "--command", action="append",
-                    help="run a command and exit (can be repeated)")
+    ap.add_argument("-c", "--command", action="append", help="run a command and exit (repeatable)")
     args = ap.parse_args(argv)
-
     if args.list_games:
-        for short, name in available_games().items():
-            print(f"  {short:<8} {name}")
+        print("\n".join(f"  {k:<8} {v['game']}" for k, v in GAMES.items()))
         return 0
     if not args.host:
         ap.error("host is required")
-    try:
-        offsets = Offsets(args.offsets or offsets_path(args.game))
-    except KeyError as e:
-        print(f"error: {e.args[0]}")
-        return 2
     xb = Xbdm(args.host, args.port)
     try:
         xb.connect()
     except (OSError, XbdmError) as e:
-        print(f"could not connect to {args.host}:{args.port}: {e}")
-        print("is the console on, RGH dashboard loaded, and XBDM plugin enabled?")
+        print(f"could not connect to {args.host}:{args.port}: {e}\n"
+              "is the console on, the dashboard loaded, and the XBDM plugin enabled?")
         return 1
-
-    shell = Shell(xb, offsets)
+    shell = Shell(xb, Profile(args.game, args.offsets))
     try:
-        if args.command:
-            for c in args.command:
-                shell.onecmd(c)
-        else:
+        for c in args.command or []:
+            shell.onecmd(c)
+        if not args.command:
             print(BANNER)
             shell.onecmd("info")
             shell.cmdloop()
