@@ -12,6 +12,8 @@ games on an RGH/JTAG console. From your PC it can:
 
 It needs Python 3.10+ and nothing else.
 
+Prefer a Windows app with buttons? There's a C# version in [`csharp/`](csharp/README.md).
+
 > Use it offline, in private matches, or on your own stealth servers.
 > Changing stats (prestige, XP, kills...) and then playing online can get the
 > account banned. Commands marked **H** affect everyone in a match you host,
